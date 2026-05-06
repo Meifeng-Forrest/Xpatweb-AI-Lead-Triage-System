@@ -1,0 +1,6 @@
+{
+  "name": "Xpatweb AI Lead Triage System",
+  "description": "An AI-driven middleware for automated lead parsing, scoring, and routing for visa consultancy, featuring 60-second call alerts and human-in-the-loop review queues.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

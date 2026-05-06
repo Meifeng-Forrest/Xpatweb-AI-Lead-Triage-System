@@ -1,0 +1,52 @@
+{
+  "entities": {
+    "Lead": {
+      "title": "Lead",
+      "description": "A visa enquiry lead from various sources.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "visaType": { "type": "string" },
+        "source": { "type": "string" },
+        "inboxBrand": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "contacted", "reviewing", "approved", "rejected", "archived"]
+        },
+        "rating": {
+          "type": "string",
+          "enum": ["GD", "MF", "MD", "BD"]
+        },
+        "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "emailDraft": { "type": "string" },
+        "whatsappDraft": { "type": "string" },
+        "phoneScript": { "type": "string" },
+        "researchBrief": {
+          "type": "object",
+          "properties": {
+            "personalProfile": { "type": "string" },
+            "employer": { "type": "string" },
+            "immigrationAnalysis": { "type": "string" },
+            "news": { "type": "string" },
+            "consultantTips": { "type": "string" }
+          }
+        },
+        "escalationFlag": { "type": "boolean" },
+        "dnqReason": { "type": "string" },
+        "assignedConsultant": { "type": "string" }
+      },
+      "required": ["name", "email", "visaType", "status"]
+    }
+  },
+  "firestore": {
+    "leads": {
+      "schema": "Lead",
+      "description": "Collection of all processed leads."
+    }
+  }
+}
