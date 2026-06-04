@@ -2,6 +2,8 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Lead, LeadRating } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+const TRIAGE_MODEL = process.env.GEMINI_MODEL_TRIAGE || "gemini-3-flash-preview";
+const RESEARCH_MODEL = process.env.GEMINI_MODEL_RESEARCH || "gemini-3.1-pro-preview";
 
 const TRIAGE_SYSTEM_PROMPT = `
 You are an expert Lead Triage AI for Xpatweb, a visa consultancy.
@@ -31,7 +33,7 @@ Output MUST be JSON.
 
 export async function triageLead(leadInput: string): Promise<Partial<Lead>> {
   const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+    model: TRIAGE_MODEL,
     contents: leadInput,
     config: {
       systemInstruction: TRIAGE_SYSTEM_PROMPT,
@@ -76,7 +78,7 @@ export async function generateResearchBrief(lead: Lead): Promise<Lead["researchB
   `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview", // Use pro for research
+    model: RESEARCH_MODEL,
     contents: prompt,
     config: {
       responseMimeType: "application/json",

@@ -32,8 +32,8 @@ export interface Lead {
   inboxBrand: string;
   timestamp: string;
   status: LeadStatus;
-  rating: LeadRating;
-  confidence: "low" | "medium" | "high";
+  rating?: LeadRating;
+  confidence?: "low" | "medium" | "high";
   reasons: string[];
   emailDraft?: string;
   whatsappDraft?: string;

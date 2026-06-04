@@ -1,0 +1,36 @@
+# 环境变量与密钥（绝不入库）
+.env
+.env.*
+*.key
+*.pem
+secrets/
+
+# 内部协作配置与资料（不入库）
+.claude/
+.agents/
+.codex/
+AGENTS.md
+CLAUDE.md
+API文档/
+
+# 依赖
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 构建产物
+dist/
+build/
+.next/
+*.egg-info/
+
+# 本地缓存与日志
+.vite/
+*.log
+.DS_Store
+
+# Docker 本地卷
+postgres-data/
+redis-data/

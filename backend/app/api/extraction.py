@@ -1,0 +1,103 @@
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from app.config import Settings, get_settings
+from app.logging import summarize_text
+from app.schemas import EmailExtractionRequest, EmailExtractionResponse, ManualExtractionRequest
+from app.services.gemini_extraction import EXTRACTION_TEMPERATURE, GeminiExtractionService
+from app.services.shengsuanyun_extraction import ShengSuanYunExtractionService
+
+router = APIRouter(prefix="/api/v1/extraction", tags=["extraction"])
+logger = logging.getLogger("lead_triage.api.extraction")
+
+
+def settings_from_request(request: Request) -> Settings:
+    return getattr(request.app.state, "settings", get_settings())
+
+
+@router.post("/manual", response_model=EmailExtractionResponse)
+async def extract_manual_text(
+    payload: ManualExtractionRequest,
+    settings: Settings = Depends(settings_from_request),
+) -> EmailExtractionResponse:
+    logger.info(
+        "[api/extraction/manual] enter %s",
+        {
+            "raw_text": summarize_text(payload.raw_text),
+            "provider": "shengsuanyun",
+            "model": settings.shengsuanyun_model,
+            "temperature": EXTRACTION_TEMPERATURE,
+        },
+    )
+    try:
+        extracted = await ShengSuanYunExtractionService(settings).extract_manual_text(payload.raw_text)
+    except RuntimeError as exc:
+        logger.error("[api/extraction/manual] config_error %s", {"error": str(exc)})
+        raise HTTPException(status_code=503, detail="ShengSuanYun extraction is not configured") from exc
+    except Exception as exc:
+        logger.error(
+            "[api/extraction/manual] fail %s",
+            {"error": exc.__class__.__name__, "raw_text_length": len(payload.raw_text)},
+        )
+        raise HTTPException(status_code=502, detail="ShengSuanYun extraction failed") from exc
+
+    logger.info(
+        "[api/extraction/manual] success %s",
+        {
+            "model": settings.shengsuanyun_model,
+            "visa_category_present": bool(extracted.visa_category),
+            "email_present": bool(extracted.email_address),
+        },
+    )
+    return EmailExtractionResponse(
+        provider="shengsuanyun",
+        model=settings.shengsuanyun_model,
+        temperature=EXTRACTION_TEMPERATURE,
+        extracted=extracted,
+    )
+
+
+@router.post("/email", response_model=EmailExtractionResponse)
+async def extract_email_fields(
+    payload: EmailExtractionRequest,
+    settings: Settings = Depends(settings_from_request),
+) -> EmailExtractionResponse:
+    logger.info(
+        "[api/extraction/email] enter %s",
+        {
+            "source_box": payload.source_box,
+            "subject": summarize_text(payload.email_subject),
+            "body": summarize_text(payload.email_body),
+            "provider": "gemini",
+            "model": settings.gemini_model_extract,
+            "temperature": EXTRACTION_TEMPERATURE,
+        },
+    )
+
+    try:
+        extracted = await GeminiExtractionService(settings).extract_email_fields(payload)
+    except RuntimeError as exc:
+        logger.error("[api/extraction/email] config_error %s", {"error": str(exc)})
+        raise HTTPException(status_code=503, detail="Gemini extraction is not configured") from exc
+    except Exception as exc:
+        logger.error(
+            "[api/extraction/email] fail %s",
+            {"source_box": payload.source_box, "error": exc.__class__.__name__},
+        )
+        raise HTTPException(status_code=502, detail="Gemini extraction failed") from exc
+
+    logger.info(
+        "[api/extraction/email] success %s",
+        {
+            "source_box": payload.source_box,
+            "model": settings.gemini_model_extract,
+            "visa_category_present": bool(extracted.visa_category),
+        },
+    )
+    return EmailExtractionResponse(
+        provider="gemini",
+        model=settings.gemini_model_extract,
+        temperature=EXTRACTION_TEMPERATURE,
+        extracted=extracted,
+    )

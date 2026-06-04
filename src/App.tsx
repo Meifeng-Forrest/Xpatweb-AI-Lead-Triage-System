@@ -18,6 +18,7 @@ import {
   Send,
   X,
   AlertTriangle,
+  ChevronDown,
   ChevronRight,
   ExternalLink,
   Loader2
@@ -27,11 +28,31 @@ import { MOCK_LEADS } from './mockData';
 import { cn, formatDate } from './lib/utils';
 import { RATING_LABELS, INBOX_BRANDS, VISA_TYPES } from './constants';
 import ReactMarkdown from 'react-markdown';
-import { triageLead, generateResearchBrief } from './services/geminiService';
+import { generateResearchBrief } from './services/geminiService';
+import {
+  createConfirmedManualLead,
+  extractManualText,
+  getLead,
+  getPipelineTaskStatus,
+  listAuditEvents,
+  listLeads,
+  updateLeadStatus as persistLeadStatus,
+  type BackendAuditEvent,
+  type ExtractedLeadFields,
+  type ManualExtractionResponse,
+} from './services/leadApi';
 
 // --- Components ---
 
-const RatingBadge = ({ rating, confidence }: { rating: LeadRating, confidence?: string }) => {
+const RatingBadge = ({ rating, confidence }: { rating?: LeadRating, confidence?: string }) => {
+  if (!rating) {
+    return (
+      <div className="inline-flex flex-col gap-1 px-2 py-1 rounded border bg-slate-100 text-slate-500 border-slate-200">
+        <span className="text-xs font-bold uppercase">Not Scored</span>
+      </div>
+    );
+  }
+
   const styles = {
     [LeadRating.GD]: "bg-yellow-500/10 text-yellow-600 border-yellow-200",
     [LeadRating.MF]: "bg-blue-500/10 text-blue-600 border-blue-200",
@@ -68,11 +89,39 @@ const StatusBadge = ({ status }: { status: LeadStatus }) => {
 
 export default function App() {
   const [leads, setLeads] = useState<Lead[]>(MOCK_LEADS);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'review' | 'entry' | 'analytics'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'review' | 'analytics'>('dashboard');
+  const [manualEntryOpen, setManualEntryOpen] = useState(false);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const selectedLead = leads.find(l => l.id === selectedLeadId);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPersistedLeads() {
+      try {
+        const persistedLeads = await listLeads();
+        if (!cancelled) {
+          setLeads(persistedLeads.length > 0 ? persistedLeads : MOCK_LEADS);
+          setLoadError(null);
+        }
+      } catch (err) {
+        console.error('[client/app] load_leads_fail', {
+          reason: err instanceof Error ? err.message : 'unknown',
+        });
+        if (!cancelled) {
+          setLoadError('Could not load backend leads. Showing mock data.');
+        }
+      }
+    }
+
+    loadPersistedLeads();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const stats = {
     today: leads.length,
@@ -81,38 +130,67 @@ export default function App() {
     processed: leads.filter(l => l.status === LeadStatus.APPROVED || l.status === LeadStatus.REJECTED).length
   };
 
-  const handleAddLead = async (input: { name: string, email: string, visaType: string, brand: string }) => {
-    const newLead: Lead = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: input.name,
-      email: input.email,
-      phone: "",
-      visaType: input.visaType,
-      source: "Manual",
-      inboxBrand: input.brand,
-      timestamp: new Date().toISOString(),
-      status: LeadStatus.PENDING,
-      rating: LeadRating.MD, // Temporary
-      confidence: "medium",
-      reasons: ["Manually entered"],
-      escalationFlag: false
-    };
-
-    setLeads(prev => [newLead, ...prev]);
+  const handleAddLead = async (input: {
+    rawMessage: string;
+    brand: string;
+    extraction: ManualExtractionResponse;
+  }) => {
+    const persisted = await createConfirmedManualLead({
+      ...input.extraction,
+      rawMessage: input.rawMessage,
+      brand: input.brand,
+    });
+    const newLead = await getLead(persisted.lead_id);
+    setLeads(prev => [newLead, ...prev.filter(lead => lead.id !== newLead.id)]);
     setActiveTab('dashboard');
     setSelectedLeadId(newLead.id);
+    setManualEntryOpen(false);
 
-    // Run AI Triage in background
-    try {
-      const aiResponse = await triageLead(`New lead: ${input.name}, email: ${input.email}, visa: ${input.visaType}`);
-      setLeads(prev => prev.map(l => l.id === newLead.id ? { ...l, ...aiResponse } : l));
-    } catch (e) {
-      console.error(e);
+    if (persisted.pipeline_task_id) {
+      void pollPipelineResult(persisted.lead_id, persisted.pipeline_task_id);
     }
   };
 
-  const updateLeadStatus = (id: string, status: LeadStatus) => {
+  const pollPipelineResult = async (leadId: string, taskId: string) => {
+    for (let attempt = 0; attempt < 90; attempt += 1) {
+      await new Promise(resolve => window.setTimeout(resolve, 2000));
+      try {
+        const [task, refreshedLead] = await Promise.all([getPipelineTaskStatus(taskId), getLead(leadId)]);
+        setLeads(prev => prev.map(lead => lead.id === leadId ? refreshedLead : lead));
+        if (task.status === 'SUCCESS') return;
+        if (task.status === 'FAILURE') {
+          setLoadError(`AI pipeline failed: ${task.error_type || 'unknown error'}.`);
+          return;
+        }
+      } catch (err) {
+        console.error('[client/app] pipeline_poll_fail', {
+          leadId,
+          taskId,
+          reason: err instanceof Error ? err.message : 'unknown',
+        });
+      }
+    }
+    setLoadError('AI pipeline is still processing. Refresh the page to check the latest result.');
+  };
+
+  const updateLeadStatus = async (id: string, status: LeadStatus) => {
+    const existingLead = leads.find(l => l.id === id);
     setLeads(prev => prev.map(l => l.id === id ? { ...l, status } : l));
+
+    try {
+      const persistedLead = await persistLeadStatus(id, status);
+      setLeads(prev => prev.map(l => l.id === id ? { ...l, ...persistedLead } : l));
+    } catch (err) {
+      console.error('[client/app] update_status_fail', {
+        leadId: id,
+        status,
+        reason: err instanceof Error ? err.message : 'unknown',
+      });
+      if (existingLead) {
+        setLeads(prev => prev.map(l => l.id === id ? existingLead : l));
+      }
+      setLoadError('Could not update lead status. Backend state was not changed.');
+    }
   };
 
   return (
@@ -150,7 +228,7 @@ export default function App() {
 
         <div className="mt-auto p-6 space-y-4">
           <button 
-            onClick={() => setActiveTab('entry')}
+            onClick={() => setManualEntryOpen(true)}
             className="w-full py-2.5 px-4 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-semibold flex items-center justify-center gap-2 transition-all shadow-sm shadow-orange-200 active:scale-95"
           >
             <Plus size={18} />
@@ -185,7 +263,7 @@ export default function App() {
             <h2 className="font-bold text-slate-700">
               {activeTab === 'dashboard' ? 'Inbound Leads' : 
                activeTab === 'review' ? 'Review Queue' : 
-               activeTab === 'entry' ? 'New Lead Entry' : 'Performance Analytics'}
+               'Performance Analytics'}
             </h2>
           </div>
 
@@ -210,6 +288,11 @@ export default function App() {
 
         {/* Content Area */}
         <div className="p-8">
+          {loadError && (
+            <div className="mb-4 rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3 text-xs font-semibold text-yellow-800">
+              {loadError}
+            </div>
+          )}
           <AnimatePresence mode="wait">
             {selectedLeadId ? (
               <LeadDetailView 
@@ -231,17 +314,20 @@ export default function App() {
                 leads={leads.filter(l => l.status === LeadStatus.PENDING || l.status === LeadStatus.REVIEWING)} 
                 onSelect={setSelectedLeadId}
               />
-            ) : activeTab === 'entry' ? (
-              <LeadEntryView 
-                key="entry"
-                onSubmit={handleAddLead} 
-              />
             ) : (
               <AnalyticsView key="analytics" leads={leads} />
             )}
           </AnimatePresence>
         </div>
       </main>
+      <AnimatePresence>
+        {manualEntryOpen && (
+          <ManualEntryModal
+            onClose={() => setManualEntryOpen(false)}
+            onSubmit={handleAddLead}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -336,7 +422,7 @@ const DashboardView = ({ leads, stats, onSelect }: { leads: Lead[], stats: any, 
                          <span className="text-[10px] bg-red-100 text-red-600 px-1 rounded animate-pulse font-bold">⚡ CALL NOW</span>
                        )}
                        {lead.escalationFlag && (
-                         <ShieldAlert size={14} className="text-red-600 animate-bounce" title="Escalated to Jerry" />
+	                         <ShieldAlert size={14} className="text-red-600 animate-bounce" aria-label="Escalated to Jerry" />
                        )}
                     </div>
                   </td>
@@ -369,10 +455,46 @@ const StatCard = ({ title, value, icon, trend, color, flash }: any) => (
   </div>
 );
 
-const LeadDetailView = ({ lead, onClose, onUpdateStatus }: { lead: Lead, onClose: () => void, onUpdateStatus: (id: string, s: LeadStatus) => void }) => {
+const LeadDetailView = ({ lead, onClose, onUpdateStatus }: { lead: Lead, onClose: () => void, onUpdateStatus: (id: string, s: LeadStatus) => Promise<void> }) => {
   const [activeTab, setActiveTab] = useState<'info' | 'brief'>('info');
   const [researching, setResearching] = useState(false);
   const [draftV, setDraftV] = useState<'v1' | 'v2'>('v1');
+  const [auditEvents, setAuditEvents] = useState<BackendAuditEvent[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAuditEvents() {
+      setAuditLoading(true);
+      setAuditError(null);
+      try {
+        const events = await listAuditEvents(lead.id);
+        if (!cancelled) {
+          setAuditEvents(events);
+        }
+      } catch (err) {
+        console.error('[client/detail/audit] load_fail', {
+          leadId: lead.id,
+          reason: err instanceof Error ? err.message : 'unknown',
+        });
+        if (!cancelled) {
+          setAuditEvents([]);
+          setAuditError('Audit timeline unavailable.');
+        }
+      } finally {
+        if (!cancelled) {
+          setAuditLoading(false);
+        }
+      }
+    }
+
+    loadAuditEvents();
+    return () => {
+      cancelled = true;
+    };
+  }, [lead.id]);
 
   const handleResearch = async () => {
     setResearching(true);
@@ -425,7 +547,7 @@ const LeadDetailView = ({ lead, onClose, onUpdateStatus }: { lead: Lead, onClose
                     <DetailItem label="Visa Interest" value={lead.visaType} highlight />
                     <DetailItem label="Source Code" value={lead.source} />
                     <DetailItem label="Assigned To" value={lead.assignedConsultant || "Melissa"} />
-                    <DetailItem label="Est. Revenue" value={lead.rating === LeadRating.GD ? "R44,760" : "R12,500"} highlight />
+                    <DetailItem label="Est. Revenue" value={lead.rating ? (lead.rating === LeadRating.GD ? "R44,760" : "R12,500") : "Pending qualification"} highlight />
                   </div>
                   <div className="space-y-6">
                     <div>
@@ -444,6 +566,12 @@ const LeadDetailView = ({ lead, onClose, onUpdateStatus }: { lead: Lead, onClose
                              <span>{r}</span>
                            </li>
                         ))}
+                        {lead.reasons.length === 0 && (
+                           <li className="flex gap-2 items-start text-xs text-slate-500 bg-slate-50 p-2 rounded border border-slate-100">
+                             <Loader2 size={14} className="shrink-0 mt-0.5" />
+                             <span>Qualification pending. The scoring reason will appear after the backend pipeline completes.</span>
+                           </li>
+                        )}
                         {lead.dnqReason && (
                            <li className="flex gap-2 items-start text-xs text-red-600 bg-red-50 p-2 rounded border border-red-100">
                              <ShieldAlert size={14} className="shrink-0 mt-0.5" />
@@ -617,9 +745,30 @@ const LeadDetailView = ({ lead, onClose, onUpdateStatus }: { lead: Lead, onClose
         <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 shadow-sm">
            <DetailLabel label="ACTIVITY AUDIT" />
            <div className="mt-4 space-y-4">
-              <AuditStep time="09:23" icon={<Inbox size={12} />} text="Lead ingested from XP brand." />
-              <AuditStep time="09:23" icon={<BarChart3 size={12} />} text="AI Triage complete: Scored GD." />
-              <AuditStep time="09:24" icon={<Phone size={12} />} text="60s Call Protocol activated." />
+              {auditLoading && (
+                <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <Loader2 size={14} className="animate-spin" />
+                  Loading audit timeline
+                </div>
+              )}
+              {!auditLoading && auditError && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700">
+                  {auditError}
+                </div>
+              )}
+              {!auditLoading && !auditError && auditEvents.length === 0 && (
+                <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-500">
+                  No audit events recorded yet.
+                </div>
+              )}
+              {!auditLoading && !auditError && auditEvents.map((event) => (
+                <AuditStep
+                  key={event.event_id}
+                  time={formatAuditTime(event.created_at)}
+                  icon={auditIcon(event.event_type)}
+                  text={auditText(event)}
+                />
+              ))}
            </div>
         </div>
       </div>
@@ -627,90 +776,222 @@ const LeadDetailView = ({ lead, onClose, onUpdateStatus }: { lead: Lead, onClose
   );
 };
 
-const LeadEntryView = ({ onSubmit }: { onSubmit: (data: any) => void }) => {
-  const [formData, setFormData] = useState({ name: '', email: '', visaType: VISA_TYPES[0], brand: INBOX_BRANDS[0] });
+const fieldClass = "w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all";
+
+const ManualField = ({
+  label,
+  value,
+  onChange,
+  type = 'text',
+  required = false,
+  placeholder,
+}: {
+  label: string;
+  value: string | number | null;
+  onChange: (value: string) => void;
+  type?: string;
+  required?: boolean;
+  placeholder?: string;
+}) => (
+  <label className="space-y-1.5">
+    <span className="flex items-center gap-2 text-[11px] font-bold text-slate-500 uppercase tracking-widest">
+      {label}
+      {!value && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] text-amber-700">Needs input</span>}
+    </span>
+    <input
+      required={required}
+      type={type}
+      className={fieldClass}
+      value={value ?? ''}
+      placeholder={placeholder}
+      onChange={event => onChange(event.target.value)}
+    />
+  </label>
+);
+
+const ManualEntryModal = ({
+  onClose,
+  onSubmit,
+}: {
+  onClose: () => void;
+  onSubmit: (input: { rawMessage: string; brand: string; extraction: ManualExtractionResponse }) => Promise<void>;
+}) => {
+  const [step, setStep] = useState<1 | 2>(1);
+  const [rawText, setRawText] = useState('');
+  const [brand, setBrand] = useState('');
+  const [extraction, setExtraction] = useState<ManualExtractionResponse | null>(null);
+  const [showMore, setShowMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const updateExtracted = <K extends keyof ExtractedLeadFields>(key: K, value: ExtractedLeadFields[K]) => {
+    setExtraction(current => current ? { ...current, extracted: { ...current.extracted, [key]: value } } : current);
+  };
+
+  const booleanValue = (value: boolean | null) => value === null ? '' : String(value);
+  const parseBoolean = (value: string) => value === '' ? null : value === 'true';
+  const canSubmit = Boolean(
+    extraction?.extracted.sender_name.trim()
+    && extraction.extracted.sender_name !== 'Not Provided'
+    && extraction.extracted.email_address
+    && extraction.extracted.visa_category
+    && brand
+  );
+
+  const handleExtract = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await extractManualText(rawText);
+      setExtraction(result);
+      setStep(2);
+    } catch (err) {
+      console.error('[client/manual-modal] extract_fail', { reason: err instanceof Error ? err.message : 'unknown' });
+      setError(err instanceof Error ? err.message : 'Extraction failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <motion.div 
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="max-w-2xl mx-auto bg-white border border-slate-200 rounded-3xl p-10 shadow-xl shadow-slate-100"
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-6 backdrop-blur-sm"
+      onMouseDown={event => event.target === event.currentTarget && !loading && onClose()}
     >
-      <div className="mb-10 text-center">
-         <div className="w-16 h-16 bg-orange-100 text-orange-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <Plus size={32} />
-         </div>
-         <h3 className="text-2xl font-bold tracking-tight">Manual Lead Insertion</h3>
-         <p className="text-sm text-slate-500 mt-1">AI Triage will process the lead immediately upon submission.</p>
-      </div>
-
-      <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); onSubmit(formData); }}>
-        <div className="grid grid-cols-2 gap-6">
-          <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest ml-1">Full Name</label>
-            <input 
-              required
-              type="text" 
-              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all"
-              placeholder="e.g. John Smith"
-              value={formData.name}
-              onChange={e => setFormData({...formData, name: e.target.value})}
-            />
+      <motion.div
+        initial={{ opacity: 0, y: 20, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 20, scale: 0.98 }}
+        className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"
+      >
+        <div className="flex items-center justify-between border-b border-slate-100 px-8 py-5">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-orange-600">Manual Entry · Step {step} of 2</p>
+            <h3 className="mt-1 text-xl font-bold">{step === 1 ? 'Paste lead information' : 'Confirm extracted fields'}</h3>
           </div>
-          <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest ml-1">Email Address</label>
-            <input 
-              required
-              type="email" 
-              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all"
-              placeholder="e.g. john@corp.com"
-              value={formData.email}
-              onChange={e => setFormData({...formData, email: e.target.value})}
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-6">
-          <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest ml-1">Visa Path</label>
-            <select 
-              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all"
-              value={formData.visaType}
-              onChange={e => setFormData({...formData, visaType: e.target.value})}
-            >
-              {VISA_TYPES.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest ml-1">Inbox Brand</label>
-            <div className="flex gap-2">
-              {INBOX_BRANDS.map(brand => (
-                <button
-                  key={brand}
-                  type="button"
-                  onClick={() => setFormData({...formData, brand})}
-                  className={cn(
-                    "flex-1 py-3 rounded-xl border font-bold text-xs transition-all",
-                    formData.brand === brand ? "bg-orange-600 border-orange-600 text-white shadow-md shadow-orange-100" : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
-                  )}
-                >
-                  {brand}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="pt-6">
-          <button 
-            type="submit"
-            className="w-full py-4 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl font-bold tracking-tight transition-all shadow-xl shadow-slate-200 flex items-center justify-center gap-2"
-          >
-            PROCESS LEAD THROUGH AI
-            <ChevronRight size={18} />
+          <button onClick={onClose} disabled={loading} className="rounded-full p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700">
+            <X size={20} />
           </button>
         </div>
-      </form>
+
+        <div className="overflow-y-auto p-8 custom-scrollbar">
+          {step === 1 ? (
+            <div className="space-y-6">
+              <div className="rounded-2xl border border-orange-100 bg-orange-50 p-4 text-sm text-orange-900">
+                Paste the email body, headers, form response, or any other natural-language lead information. ShengSuanYun will extract the fields for review.
+              </div>
+              <textarea
+                autoFocus
+                rows={15}
+                className={`${fieldClass} resize-none font-mono text-sm leading-relaxed`}
+                placeholder="Paste the full enquiry here..."
+                value={rawText}
+                onChange={event => setRawText(event.target.value)}
+              />
+              <button
+                onClick={handleExtract}
+                disabled={loading || !rawText.trim()}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 py-4 font-bold text-white shadow-xl disabled:bg-slate-400"
+              >
+                {loading ? <Loader2 size={18} className="animate-spin" /> : <ChevronRight size={18} />}
+                {loading ? 'EXTRACTING INFORMATION' : 'EXTRACT INFORMATION'}
+              </button>
+            </div>
+          ) : extraction ? (
+            <form
+              className="space-y-6"
+              onSubmit={async event => {
+                event.preventDefault();
+                setLoading(true);
+                setError(null);
+                try {
+                  await onSubmit({ rawMessage: rawText, brand, extraction });
+                } catch (err) {
+                  console.error('[client/manual-modal] submit_fail', { reason: err instanceof Error ? err.message : 'unknown' });
+                  setError(err instanceof Error ? err.message : 'Lead could not be saved.');
+                  setLoading(false);
+                }
+              }}
+            >
+              <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                <ManualField label="Full Name" required value={extraction.extracted.sender_name} onChange={value => updateExtracted('sender_name', value)} />
+                <ManualField label="Email Address" required type="email" value={extraction.extracted.email_address} onChange={value => updateExtracted('email_address', value || null)} />
+                <ManualField label="Phone Number" value={extraction.extracted.contact_number} onChange={value => updateExtracted('contact_number', value || null)} />
+                <ManualField label="Visa Category" required value={extraction.extracted.visa_category} placeholder={VISA_TYPES.join(', ')} onChange={value => updateExtracted('visa_category', value || null)} />
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Inbox Brand <span className="text-red-500">*</span></p>
+                <div className="grid grid-cols-4 gap-2">
+                  {INBOX_BRANDS.map(item => (
+                    <button key={item} type="button" onClick={() => setBrand(item)} className={cn("rounded-xl border py-3 text-xs font-bold", brand === item ? "border-orange-600 bg-orange-600 text-white" : "border-slate-200 text-slate-500")}>
+                      {item}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button type="button" onClick={() => setShowMore(value => !value)} className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700">
+                More extracted fields
+                <ChevronDown size={18} className={cn("transition-transform", showMore && "rotate-180")} />
+              </button>
+
+              {showMore && (
+                <div className="grid grid-cols-1 gap-5 rounded-2xl border border-slate-200 p-5 md:grid-cols-2">
+                  <ManualField label="Lead Type" value={extraction.extracted.lead_type} onChange={value => updateExtracted('lead_type', (value || null) as ExtractedLeadFields['lead_type'])} />
+                  <ManualField label="Current Visa" value={extraction.extracted.current_visa} onChange={value => updateExtracted('current_visa', value || null)} />
+                  <ManualField label="PR Route" value={extraction.extracted.pr_route} onChange={value => updateExtracted('pr_route', (value || null) as ExtractedLeadFields['pr_route'])} />
+                  <ManualField label="Nationality" value={extraction.extracted.nationality} onChange={value => updateExtracted('nationality', value || null)} />
+                  <ManualField label="Job Title" value={extraction.extracted.job_title} onChange={value => updateExtracted('job_title', value || null)} />
+                  <ManualField label="Net Worth / Income Signal" value={extraction.extracted.net_worth_indicator} onChange={value => updateExtracted('net_worth_indicator', value || null)} />
+                  <ManualField label="Qualifying Work Visa Years" type="number" value={extraction.extracted.qualifying_work_visa_years} onChange={value => updateExtracted('qualifying_work_visa_years', value ? Number(value) : null)} />
+                  <ManualField label="Annual Salary ZAR" type="number" value={extraction.extracted.annual_salary_zar} onChange={value => updateExtracted('annual_salary_zar', value ? Number(value) : null)} />
+                  <ManualField label="Relationship Duration" value={extraction.extracted.relationship_duration} onChange={value => updateExtracted('relationship_duration', value || null)} />
+                  <ManualField label="Marriage Type" value={extraction.extracted.marriage_type} onChange={value => updateExtracted('marriage_type', (value || null) as ExtractedLeadFields['marriage_type'])} />
+                  <ManualField label="Rejection Date" type="date" value={extraction.extracted.rejection_date} onChange={value => updateExtracted('rejection_date', value || null)} />
+                  <ManualField label="Additional Information" value={extraction.extracted.additional_info} onChange={value => updateExtracted('additional_info', value || null)} />
+                  {([
+                    ['First-world nationality', 'is_first_world'],
+                    ['Has job offer', 'has_job_offer'],
+                    ['PBS score below 100', 'pbs_total_score_below_100'],
+                  ] as const).map(([label, key]) => (
+                    <label key={key} className="space-y-1.5">
+                      <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">{label}</span>
+                      <select className={fieldClass} value={booleanValue(extraction.extracted[key])} onChange={event => updateExtracted(key, parseBoolean(event.target.value))}>
+                        <option value="">Unknown</option><option value="true">Yes</option><option value="false">No</option>
+                      </select>
+                    </label>
+                  ))}
+                  <label className="space-y-1.5">
+                    <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Email Coherence</span>
+                    <select className={fieldClass} value={extraction.extracted.email_coherence} onChange={event => updateExtracted('email_coherence', event.target.value as ExtractedLeadFields['email_coherence'])}>
+                      <option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium">
+                    <input type="checkbox" checked={extraction.extracted.urgency_flag} onChange={event => updateExtracted('urgency_flag', event.target.checked)} /> Urgency detected
+                  </label>
+                  <label className="flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium">
+                    <input type="checkbox" checked={extraction.extracted.multi_visa_flag} onChange={event => updateExtracted('multi_visa_flag', event.target.checked)} /> Multiple visas detected
+                  </label>
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button type="button" disabled={loading} onClick={() => setStep(1)} className="rounded-2xl border border-slate-200 px-6 py-4 font-bold text-slate-600">BACK</button>
+                <button type="submit" disabled={loading || !canSubmit} className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-slate-900 py-4 font-bold text-white disabled:bg-slate-400">
+                  {loading ? <Loader2 size={18} className="animate-spin" /> : <ChevronRight size={18} />}
+                  {loading ? 'SAVING & STARTING AI' : 'CONFIRM & PROCESS LEAD'}
+                </button>
+              </div>
+            </form>
+          ) : null}
+          {error && <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</div>}
+        </div>
+      </motion.div>
     </motion.div>
   );
 };
@@ -883,6 +1164,39 @@ const WorkflowButton = ({ icon, label, onClick, primary }: any) => (
   </button>
 );
 
+const formatAuditTime = (dateString: string) => {
+  const date = new Date(dateString);
+  return date.toLocaleTimeString('en-ZA', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const statusLabel = (value: unknown) => {
+  if (typeof value !== 'string') return 'unknown';
+  return value.replace(/_/g, ' ');
+};
+
+const auditText = (event: BackendAuditEvent) => {
+  if (event.event_type === 'lead.received.manual') {
+    return 'Lead received from manual entry.';
+  }
+
+  if (event.event_type === 'lead.status_changed') {
+    return `Status changed: ${statusLabel(event.metadata.previous_status)} -> ${statusLabel(event.metadata.new_status)}.`;
+  }
+
+  return event.event_type.replace(/\./g, ' ');
+};
+
+const auditIcon = (eventType: string) => {
+  if (eventType === 'lead.received.manual') return <Inbox size={12} />;
+  if (eventType === 'lead.status_changed') return <CheckCircle2 size={12} />;
+  if (eventType.includes('triage') || eventType.includes('scored')) return <BarChart3 size={12} />;
+  if (eventType.includes('call')) return <Phone size={12} />;
+  return <Clock size={12} />;
+};
+
 const AuditStep = ({ time, icon, text }: any) => (
   <div className="flex gap-3">
      <div className="flex flex-col items-center gap-1 shrink-0">
@@ -892,7 +1206,7 @@ const AuditStep = ({ time, icon, text }: any) => (
         <div className="w-px flex-1 bg-slate-200" />
      </div>
      <div className="pb-4">
-        <p className="text-[10px] font-bold text-slate-400 leading-tight mb-1">{time} AM</p>
+        <p className="text-[10px] font-bold text-slate-400 leading-tight mb-1">{time}</p>
         <p className="text-xs text-slate-600 leading-snug">{text}</p>
      </div>
   </div>
