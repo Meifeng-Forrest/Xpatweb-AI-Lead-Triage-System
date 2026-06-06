@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     mailbox_risa: str = Field(default="", alias="MAILBOX_RISA")
     mailbox_vls: str = Field(default="", alias="MAILBOX_VLS")
     mailbox_smv: str = Field(default="", alias="MAILBOX_SMV")
+    auth_enabled: bool = Field(default=False, alias="AUTH_ENABLED")
+    auth_jwt_secret: str = Field(default="local-dev-auth-secret-change-me", alias="AUTH_JWT_SECRET")
+    auth_token_ttl_minutes: int = Field(default=480, alias="AUTH_TOKEN_TTL_MINUTES")
+    auth_seed_password: str = Field(default="ChangeMe123!", alias="AUTH_SEED_PASSWORD")
+    form_webhook_secret: str = Field(default="", alias="FORM_WEBHOOK_SECRET")
+    web_search_provider: str = Field(default="", alias="WEB_SEARCH_PROVIDER")
+    web_search_api_key: str = Field(default="", alias="WEB_SEARCH_API_KEY")
 
     @property
     def configured_mailbox_count(self) -> int:

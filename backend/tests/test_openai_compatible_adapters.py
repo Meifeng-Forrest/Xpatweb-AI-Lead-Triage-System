@@ -3,8 +3,7 @@ from unittest.mock import AsyncMock
 
 from pydantic import ValidationError
 
-from app.config import Settings
-from app.services.shengsuanyun_extraction import ShengSuanYunExtractionService
+from app.services.openai_compatible_adapters import OpenAICompatibleExtractionAdapter
 
 
 def valid_extracted() -> dict:
@@ -35,9 +34,18 @@ def valid_extracted() -> dict:
     }
 
 
-class ShengSuanYunExtractionTest(unittest.IsolatedAsyncioTestCase):
-    async def test_valid_response_is_parsed(self) -> None:
-        service = ShengSuanYunExtractionService(Settings())
+def extraction_adapter() -> OpenAICompatibleExtractionAdapter:
+    return OpenAICompatibleExtractionAdapter(
+        provider="fixture-provider",
+        base_url="https://provider.example/v1",
+        api_key="test-key",
+        model="fixture-model",
+    )
+
+
+class OpenAICompatibleAdaptersTest(unittest.IsolatedAsyncioTestCase):
+    async def test_valid_extraction_response_is_parsed(self) -> None:
+        service = extraction_adapter()
         service.client.generate_json = AsyncMock(return_value=valid_extracted())
 
         result = await service.extract_manual_text("Retirement enquiry")
@@ -45,8 +53,8 @@ class ShengSuanYunExtractionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.sender_name, "Jane Doe")
         self.assertEqual(result.visa_category, "Retired Person Visa")
 
-    async def test_invalid_response_is_rejected(self) -> None:
-        service = ShengSuanYunExtractionService(Settings())
+    async def test_invalid_extraction_response_is_rejected(self) -> None:
+        service = extraction_adapter()
         service.client.generate_json = AsyncMock(return_value={"sender_name": "Jane"})
 
         with self.assertRaises(ValidationError):

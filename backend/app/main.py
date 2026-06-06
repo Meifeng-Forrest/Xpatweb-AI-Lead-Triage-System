@@ -1,9 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.auth import router as auth_router
 from app.api.extraction import router as extraction_router
 from app.api.health import router as health_router
 from app.api.leads import router as leads_router
+from app.api.routing import router as routing_router
+from app.api.users import router as users_router
 from app.config import get_settings
 from app.database import lifespan
 from app.logging import configure_logging
@@ -28,5 +31,8 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(auth_router)
+app.include_router(users_router)
+app.include_router(routing_router)
 app.include_router(leads_router)
 app.include_router(extraction_router)

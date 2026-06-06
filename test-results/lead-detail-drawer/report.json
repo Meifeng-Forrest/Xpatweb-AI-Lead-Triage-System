@@ -1,0 +1,77 @@
+{
+  "generatedAt": "2026-06-06T03:54:47.538Z",
+  "app": "http://localhost:3001/",
+  "api": "http://localhost:8000/api/v1",
+  "checks": [
+    {
+      "role": "superadmin-ui",
+      "drawerVisible": true,
+      "actionButtons": [
+        "Approve & Send",
+        "Return",
+        "Archive"
+      ]
+    },
+    {
+      "role": "superadmin",
+      "consoleErrors": [
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "pageErrors": []
+    },
+    {
+      "role": "agent-ui",
+      "approveDisabled": true,
+      "editButtonCount": 9,
+      "fieldSaveVisible": true
+    },
+    {
+      "role": "agent",
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "role": "reviewer-ui",
+      "approveVisible": true,
+      "approveDisabled": true,
+      "editButtonCount": 0
+    },
+    {
+      "role": "reviewer",
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "role": "approver-ui",
+      "approveVisible": true,
+      "approveDisabled": true,
+      "editButtonCount": 0
+    },
+    {
+      "role": "approver",
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "role": "quality_lead-ui",
+      "approveVisible": true,
+      "approveDisabled": true,
+      "editButtonCount": 0
+    },
+    {
+      "role": "quality_lead",
+      "consoleErrors": [],
+      "pageErrors": []
+    }
+  ],
+  "screenshots": {
+    "superadminOpen": "/Users/wangmeifeng/Projects/Developer/Limen/Xpatweb-AI-Lead-Triage-System/test-results/lead-detail-drawer/superadmin-drawer-open.png",
+    "superadminSwitched": "/Users/wangmeifeng/Projects/Developer/Limen/Xpatweb-AI-Lead-Triage-System/test-results/lead-detail-drawer/superadmin-drawer-switched.png",
+    "agentEditable": "/Users/wangmeifeng/Projects/Developer/Limen/Xpatweb-AI-Lead-Triage-System/test-results/lead-detail-drawer/agent-editable.png",
+    "reviewer": "/Users/wangmeifeng/Projects/Developer/Limen/Xpatweb-AI-Lead-Triage-System/test-results/lead-detail-drawer/reviewer-readonly.png",
+    "approver": "/Users/wangmeifeng/Projects/Developer/Limen/Xpatweb-AI-Lead-Triage-System/test-results/lead-detail-drawer/approver-readonly.png",
+    "quality_lead": "/Users/wangmeifeng/Projects/Developer/Limen/Xpatweb-AI-Lead-Triage-System/test-results/lead-detail-drawer/quality_lead-readonly.png"
+  },
+  "failures": []
+}

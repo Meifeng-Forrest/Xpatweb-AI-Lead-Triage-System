@@ -26,6 +26,7 @@ export interface Lead {
   id: string;
   name: string;
   email: string;
+  rawMessage?: string;
   phone: string;
   visaType: string;
   source: string;
@@ -42,11 +43,12 @@ export interface Lead {
   escalationFlag: boolean;
   dnqReason?: string;
   assignedConsultant?: string;
+  estimatedRevenue?: string;
 }
 
 export interface User {
   id: string;
   email: string;
   name: string;
-  role: "leads_team" | "melissa" | "marisa" | "jerry" | "willem";
+  role: "superadmin" | "approver" | "agent" | "quality_lead" | "reviewer";
 }

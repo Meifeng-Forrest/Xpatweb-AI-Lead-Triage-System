@@ -1,21 +1,12 @@
 import json
-import logging
-import time
 from typing import Any
 
-import httpx
-from pydantic import ValidationError
-
-from app.config import Settings
 from app.repositories.leads import LeadRecord
-from app.schemas import DraftResult, LeadScoreResult
-from app.services.gemini_http import gemini_error_summary
-
-logger = logging.getLogger("lead_triage.services.gemini_triage")
 
 
 SCORE_TEMPERATURE = 0.0
 DRAFT_TEMPERATURE = 0.2
+OPENAI_COMPATIBLE_TRIAGE_TEMPERATURE = 0.6
 
 
 SCORE_SCHEMA: dict[str, Any] = {
@@ -60,15 +51,8 @@ DRAFT_SCHEMA: dict[str, Any] = {
 }
 
 
-def gemini_endpoint(settings: Settings, model: str) -> str:
-    return f"{settings.gemini_base_url.rstrip('/')}/v1beta/models/{model}:generateContent"
-
-
-def extract_text_from_gemini_response(data: dict[str, Any]) -> str:
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise ValueError("Gemini response did not contain generated JSON text") from exc
+def with_schema(prompt: str, schema: dict[str, Any]) -> str:
+    return f"{prompt}\n\nReturn one JSON object matching this JSON Schema:\n{json.dumps(schema, ensure_ascii=False)}"
 
 
 def lead_context(lead: LeadRecord) -> dict[str, Any]:
@@ -156,106 +140,3 @@ Draft requirements:
 - phone_script: short opening call script for GD/MF/MD leads, or null if inappropriate.
 - internal_whatsapp_post: internal Box-Quality-Action style note for the team.
 """.strip()
-
-
-class GeminiTriageService:
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-
-    async def _generate_json(
-        self,
-        *,
-        tag: str,
-        model: str,
-        prompt: str,
-        schema: dict[str, Any],
-        temperature: float,
-        summary: dict[str, Any],
-    ) -> dict[str, Any]:
-        if not self.settings.gemini_api_key:
-            raise RuntimeError("GEMINI_API_KEY is not configured")
-
-        logger.info("%s enter %s", tag, {**summary, "model": model, "temperature": temperature})
-        started_at = time.perf_counter()
-        request_body = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": temperature,
-                "responseMimeType": "application/json",
-                "responseJsonSchema": schema,
-            },
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=45) as client:
-                response = await client.post(
-                    gemini_endpoint(self.settings, model),
-                    headers={
-                        "Content-Type": "application/json",
-                        "x-goog-api-key": self.settings.gemini_api_key,
-                    },
-                    json=request_body,
-                )
-            response.raise_for_status()
-            text = extract_text_from_gemini_response(response.json())
-            data = json.loads(text)
-        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
-            logger.exception(
-                "%s fail %s",
-                tag,
-                {
-                    **summary,
-                    "model": model,
-                    "ms": round((time.perf_counter() - started_at) * 1000),
-                    **gemini_error_summary(exc),
-                    "error": str(exc)[:300],
-                },
-            )
-            raise
-
-        logger.info(
-            "%s success %s",
-            tag,
-            {**summary, "model": model, "ms": round((time.perf_counter() - started_at) * 1000)},
-        )
-        return data
-
-    async def score_lead(self, lead: LeadRecord) -> LeadScoreResult:
-        data = await self._generate_json(
-            tag="[llm/gemini/score]",
-            model=self.settings.gemini_model_score,
-            prompt=build_score_prompt(lead),
-            schema=SCORE_SCHEMA,
-            temperature=SCORE_TEMPERATURE,
-            summary={
-                "lead_id": lead.lead_id,
-                "source_box": lead.source_box,
-                "visa_category_present": bool(lead.visa_category),
-                "email_coherence": lead.email_coherence,
-            },
-        )
-        try:
-            return LeadScoreResult.model_validate(data)
-        except ValidationError:
-            logger.exception("[llm/gemini/score] validation_fail %s", {"lead_id": lead.lead_id})
-            raise
-
-    async def draft_for_lead(self, lead: LeadRecord) -> DraftResult:
-        data = await self._generate_json(
-            tag="[llm/gemini/draft]",
-            model=self.settings.gemini_model_draft,
-            prompt=build_draft_prompt(lead),
-            schema=DRAFT_SCHEMA,
-            temperature=DRAFT_TEMPERATURE,
-            summary={
-                "lead_id": lead.lead_id,
-                "source_box": lead.source_box,
-                "lead_score": lead.lead_score,
-                "visa_category_present": bool(lead.visa_category),
-            },
-        )
-        try:
-            return DraftResult.model_validate(data)
-        except ValidationError:
-            logger.exception("[llm/gemini/draft] validation_fail %s", {"lead_id": lead.lead_id})
-            raise

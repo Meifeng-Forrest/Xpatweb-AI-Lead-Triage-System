@@ -17,11 +17,3 @@ export const RATING_LABELS = {
   MD: "Medium",
   BD: "Bad — Low Value",
 };
-
-export const CONSULTANTS = [
-  { id: "melissa", name: "Melissa", role: "melissa" },
-  { id: "marisa", name: "Marisa", role: "marisa" },
-  { id: "jerry", name: "Jerry", role: "jerry" },
-  { id: "willem", name: "Willem", role: "willem" },
-  { id: "leads1", name: "Leads Team A", role: "leads_team" },
-];

@@ -34,6 +34,21 @@ class ManualLeadCreate(BaseModel):
     raw_message: str = Field(min_length=1, max_length=12000)
 
 
+class FormWebhookLeadCreate(BaseModel):
+    source_box: SourceBox
+    fields: dict[str, Any] = Field(default_factory=dict)
+    form_name: str | None = Field(default=None, max_length=200)
+    sender_name: str | None = Field(default=None, max_length=200)
+    email_address: str | None = Field(default=None, max_length=320)
+    contact_number: str | None = Field(default=None, max_length=80)
+    visa_category: str | None = Field(default=None, max_length=200)
+    lead_source: str | None = Field(default=None, max_length=80)
+    utm_source: str | None = Field(default=None, max_length=120)
+    utm_campaign: str | None = Field(default=None, max_length=120)
+    campaign_code: str | None = Field(default=None, max_length=120)
+    raw_message: str | None = Field(default=None, max_length=12000)
+
+
 class ManualLeadAccepted(BaseModel):
     lead_id: str
     status: LeadStatus
@@ -47,6 +62,7 @@ class LeadRead(BaseModel):
     lead_id: str
     sender_name: str
     email_address: EmailStr
+    raw_message: str
     contact_number: str | None
     email_domain: str
     visa_category: str | None
@@ -95,6 +111,7 @@ class LeadRead(BaseModel):
     drafted_at: datetime | None = None
     source_box: SourceBox
     lead_source: str | None
+    assigned_consultant: str | None = None
     status: LeadStatus
     created_at: datetime
     updated_at: datetime
@@ -102,7 +119,92 @@ class LeadRead(BaseModel):
 
 class LeadStatusUpdate(BaseModel):
     status: LeadStatus
-    actor: str = Field(default="frontend", max_length=120)
+
+
+class LeadFieldEditRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    email: EmailStr | None = None
+    phone: str | None = Field(default=None, max_length=80)
+    visa_category: str | None = Field(default=None, max_length=200)
+    source: str | None = Field(default=None, max_length=80)
+    assigned_consultant: str | None = Field(default=None, max_length=120)
+    brand: SourceBox | None = None
+
+
+class LeadActionRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class DraftEditRequest(BaseModel):
+    email_draft: str | None = Field(default=None, max_length=12000)
+    whatsapp_draft: str | None = Field(default=None, max_length=4000)
+    phone_script: str | None = Field(default=None, max_length=4000)
+    internal_whatsapp_post: str | None = Field(default=None, max_length=4000)
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class AuthLoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=200)
+
+
+class AuthUserRead(BaseModel):
+    user_id: str
+    email: EmailStr
+    display_name: str
+    roles: list[str]
+    permissions: list[str]
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in_seconds: int
+    user: AuthUserRead
+
+
+class UserRead(BaseModel):
+    user_id: str
+    email: str
+    display_name: str
+    roles: list[str]
+    permissions: list[str]
+    routing_categories: list[str] = Field(default_factory=list)
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserCreateRequest(BaseModel):
+    email: EmailStr
+    display_name: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=8, max_length=200)
+    roles: list[str] = Field(min_length=1, max_length=1)
+    is_active: bool = True
+
+
+class UserUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    roles: list[str] | None = Field(default=None, min_length=1, max_length=1)
+    is_active: bool | None = None
+
+
+class UserPasswordResetRequest(BaseModel):
+    password: str = Field(min_length=8, max_length=200)
+
+
+class UserRoutingCategoriesUpdateRequest(BaseModel):
+    categories: list[str] = Field(default_factory=list, max_length=20)
+
+
+class RoutingRuleRead(BaseModel):
+    category: str
+    recipients: list[UserRead]
+    fallback_to_superadmin: bool = False
+
+
+class RoutingRuleUpdateRequest(BaseModel):
+    user_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
 class AuditEventRead(BaseModel):
@@ -112,6 +214,33 @@ class AuditEventRead(BaseModel):
     actor: str
     metadata: dict[str, Any]
     created_at: datetime
+
+
+class ResearchBriefFields(BaseModel):
+    personalProfile: str = ""
+    employer: str = ""
+    immigrationAnalysis: str = ""
+    news: str = ""
+    consultantTips: str = ""
+
+
+class ResearchBriefRead(BaseModel):
+    lead_id: str
+    status: str
+    task_id: str | None = None
+    brief: ResearchBriefFields | None = None
+    source_refs: list[dict[str, Any]] = Field(default_factory=list)
+    error_type: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+
+
+class ResearchQueuedResponse(BaseModel):
+    lead_id: str
+    task_id: str
+    status: str = "queued"
 
 
 class EmailExtractionRequest(BaseModel):
@@ -162,7 +291,7 @@ class ManualConfirmedLeadCreate(BaseModel):
     raw_message: str = Field(min_length=1, max_length=30000)
     source_box: SourceBox
     extracted: ExtractedEmailFields
-    extraction_provider: str = Field(default="shengsuanyun", max_length=80)
+    extraction_provider: str = Field(default="llm", max_length=80)
     extraction_model: str = Field(max_length=120)
     extraction_temperature: float = 0.0
 
@@ -216,6 +345,14 @@ class DraftResult(BaseModel):
     whatsapp_draft: str | None = Field(default=None, max_length=4000)
     phone_script: str | None = Field(default=None, max_length=4000)
     internal_whatsapp_post: str | None = Field(default=None, max_length=4000)
+    template_id: str | None = Field(default=None, max_length=120)
+    visa_bucket: str | None = Field(default=None, max_length=20)
+    professional_fee_zar: str | None = Field(default=None, max_length=80)
+    admin_fee_zar: str | None = Field(default=None, max_length=80)
+    fee_source: str | None = Field(default=None, max_length=200)
+    materials_checklist: list[str] = Field(default_factory=list, max_length=20)
+    dnq_reason: str | None = Field(default=None, max_length=40)
+    alternative_suggestions: list[str] = Field(default_factory=list, max_length=10)
 
 
 class DraftResponse(BaseModel):

@@ -1,4 +1,5 @@
 import { Lead, LeadRating, LeadStatus } from '../types';
+import { authFetch } from './authApi';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -60,11 +61,13 @@ export interface BackendLead {
   lead_id: string;
   sender_name: string;
   email_address: string;
+  raw_message: string;
   contact_number: string | null;
   email_domain: string;
   visa_category: string | null;
   source_box: string;
   lead_source: string | null;
+  assigned_consultant?: string | null;
   status: 'received' | 'contacted' | 'scored' | 'drafted' | 'in_review' | 'sent' | 'dnq' | 'archived';
   lead_score?: 'GD' | 'MF' | 'MD' | 'BD' | null;
   dnq_reason?: string | null;
@@ -75,6 +78,12 @@ export interface BackendLead {
   email_draft?: string | null;
   whatsapp_draft?: string | null;
   phone_script?: string | null;
+  draft_fields?: {
+    professional_fee_zar?: string | null;
+    admin_fee_zar?: string | null;
+    fee_source?: string | null;
+    template_id?: string | null;
+  } | null;
   created_at: string;
   updated_at: string;
 }
@@ -111,7 +120,7 @@ export async function createManualLead(input: ManualLeadInput): Promise<ManualLe
   console.log('[client/leads/manual] enter', summary);
 
   const startedAt = Date.now();
-  const response = await fetch(`${API_BASE_URL}/api/v1/leads/manual`, {
+  const response = await authFetch(`${API_BASE_URL}/api/v1/leads/manual`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -151,7 +160,7 @@ async function readError(response: Response) {
 export async function extractManualText(rawText: string): Promise<ManualExtractionResponse> {
   console.log('[client/extraction/manual] enter', { rawTextLength: rawText.length });
   const startedAt = Date.now();
-  const response = await fetch(`${API_BASE_URL}/api/v1/extraction/manual`, {
+  const response = await authFetch(`${API_BASE_URL}/api/v1/extraction/manual`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ raw_text: rawText }),
@@ -179,7 +188,7 @@ export async function createConfirmedManualLead(input: ConfirmedManualLeadInput)
     model: input.model,
   });
   const startedAt = Date.now();
-  const response = await fetch(`${API_BASE_URL}/api/v1/leads/manual-confirmed`, {
+  const response = await authFetch(`${API_BASE_URL}/api/v1/leads/manual-confirmed`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -231,11 +240,19 @@ function mapBackendRating(score: BackendLead['lead_score']): LeadRating | undefi
   return undefined;
 }
 
+function mapEstimatedRevenue(lead: BackendLead): string | undefined {
+  const professionalFee = lead.draft_fields?.professional_fee_zar;
+  const adminFee = lead.draft_fields?.admin_fee_zar;
+  if (!professionalFee) return undefined;
+  return adminFee ? `${professionalFee} + ${adminFee}` : professionalFee;
+}
+
 export function mapBackendLeadToLead(lead: BackendLead): Lead {
   return {
     id: lead.lead_id,
     name: lead.sender_name,
     email: lead.email_address,
+    rawMessage: lead.raw_message || undefined,
     phone: lead.contact_number || '',
     visaType: lead.visa_category || 'Not Provided',
     source: lead.lead_source || 'Backend',
@@ -250,13 +267,15 @@ export function mapBackendLeadToLead(lead: BackendLead): Lead {
     phoneScript: lead.phone_script || undefined,
     escalationFlag: Boolean(lead.escalation_flag),
     dnqReason: lead.dnq_reason || lead.soft_dnq_warning || undefined,
+    assignedConsultant: lead.assigned_consultant || undefined,
+    estimatedRevenue: mapEstimatedRevenue(lead),
   };
 }
 
 export async function listLeads(limit = 100): Promise<Lead[]> {
   console.log('[client/leads/list] enter', { limit });
   const startedAt = Date.now();
-  const response = await fetch(`${API_BASE_URL}/api/v1/leads?limit=${limit}`);
+  const response = await authFetch(`${API_BASE_URL}/api/v1/leads?limit=${limit}`);
 
   if (!response.ok) {
     const message = await response.text();
@@ -277,7 +296,7 @@ export async function listLeads(limit = 100): Promise<Lead[]> {
 }
 
 export async function getLead(leadId: string): Promise<Lead> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/leads/${leadId}`);
+  const response = await authFetch(`${API_BASE_URL}/api/v1/leads/${leadId}`);
   if (!response.ok) {
     console.error('[client/leads/get] fail', { leadId, status: response.status });
     throw new Error('Failed to load lead');
@@ -287,7 +306,7 @@ export async function getLead(leadId: string): Promise<Lead> {
 }
 
 export async function getPipelineTaskStatus(taskId: string): Promise<PipelineTaskStatus> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/leads/pipeline-tasks/${taskId}`);
+  const response = await authFetch(`${API_BASE_URL}/api/v1/leads/pipeline-tasks/${taskId}`);
   if (!response.ok) {
     console.error('[client/leads/pipeline-task] fail', { taskId, status: response.status });
     throw new Error('Failed to load pipeline task');
@@ -299,12 +318,11 @@ export async function updateLeadStatus(leadId: string, status: LeadStatus): Prom
   const backendStatus = mapFrontendStatus(status);
   console.log('[client/leads/status] enter', { leadId, status: backendStatus });
   const startedAt = Date.now();
-  const response = await fetch(`${API_BASE_URL}/api/v1/leads/${leadId}/status`, {
+  const response = await authFetch(`${API_BASE_URL}/api/v1/leads/${leadId}/status`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       status: backendStatus,
-      actor: 'frontend',
     }),
   });
 
@@ -329,10 +347,153 @@ export async function updateLeadStatus(leadId: string, status: LeadStatus): Prom
   return mapBackendLeadToLead(data);
 }
 
+async function postLeadAction(
+  leadId: string,
+  action: 'approve' | 'reject' | 'reject-confirm',
+  reason?: string,
+): Promise<Lead> {
+  console.log('[client/leads/action] enter', { leadId, action, reasonPresent: Boolean(reason) });
+  const startedAt = Date.now();
+  const response = await authFetch(`${API_BASE_URL}/api/v1/leads/${leadId}/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: reason ? JSON.stringify({ reason }) : JSON.stringify({}),
+  });
+
+  if (!response.ok) {
+    const message = await readError(response);
+    console.error('[client/leads/action] fail', {
+      leadId,
+      action,
+      status: response.status,
+      ms: Date.now() - startedAt,
+      reason: message,
+    });
+    throw new Error(action === 'approve' && response.status === 409
+      ? 'A second reviewer must approve this lead.'
+      : 'Could not complete workflow action.');
+  }
+
+  const data: BackendLead = await response.json();
+  console.log('[client/leads/action] success', { leadId, action, status: data.status, ms: Date.now() - startedAt });
+  return mapBackendLeadToLead(data);
+}
+
+export function approveLead(leadId: string) {
+  return postLeadAction(leadId, 'approve');
+}
+
+export function rejectLead(leadId: string, reason?: string) {
+  return postLeadAction(leadId, 'reject', reason);
+}
+
+export function confirmLeadRejection(leadId: string, reason?: string) {
+  return postLeadAction(leadId, 'reject-confirm', reason);
+}
+
+export interface LeadFieldEditInput {
+  name?: string;
+  email?: string;
+  phone?: string | null;
+  visaCategory?: string | null;
+  source?: string | null;
+  assignedConsultant?: string | null;
+  brand?: string;
+}
+
+export async function editLeadFields(leadId: string, input: LeadFieldEditInput): Promise<Lead> {
+  const body: Record<string, unknown> = {};
+  if (input.name !== undefined) body.name = input.name;
+  if (input.email !== undefined) body.email = input.email;
+  if (input.phone !== undefined) body.phone = input.phone;
+  if (input.visaCategory !== undefined) body.visa_category = input.visaCategory;
+  if (input.source !== undefined) body.source = input.source;
+  if (input.assignedConsultant !== undefined) body.assigned_consultant = input.assignedConsultant;
+  if (input.brand !== undefined) body.brand = input.brand;
+
+  console.log('[client/leads/edit-fields] enter', {
+    leadId,
+    fields: Object.keys(body),
+    containsPrivateFields: ['name', 'email', 'phone'].some(field => field in body),
+  });
+  const startedAt = Date.now();
+  const response = await authFetch(`${API_BASE_URL}/api/v1/leads/${leadId}/fields`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const reason = await readError(response);
+    console.error('[client/leads/edit-fields] fail', {
+      leadId,
+      status: response.status,
+      ms: Date.now() - startedAt,
+      reason,
+    });
+    throw new Error('Could not save lead field edits.');
+  }
+
+  const data: BackendLead = await response.json();
+  console.log('[client/leads/edit-fields] success', {
+    leadId,
+    status: data.status,
+    ms: Date.now() - startedAt,
+  });
+  return mapBackendLeadToLead(data);
+}
+
+export async function editLeadDraft(
+  leadId: string,
+  input: {
+    emailDraft?: string;
+    whatsappDraft?: string;
+    phoneScript?: string;
+    internalWhatsappPost?: string;
+    reason?: string;
+  },
+): Promise<Lead> {
+  console.log('[client/leads/edit-draft] enter', {
+    leadId,
+    emailDraftChanged: input.emailDraft !== undefined,
+    whatsappChanged: input.whatsappDraft !== undefined,
+    phoneScriptChanged: input.phoneScript !== undefined,
+    internalPostChanged: input.internalWhatsappPost !== undefined,
+    reasonPresent: Boolean(input.reason),
+  });
+  const startedAt = Date.now();
+  const response = await authFetch(`${API_BASE_URL}/api/v1/leads/${leadId}/edit-draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email_draft: input.emailDraft,
+      whatsapp_draft: input.whatsappDraft,
+      phone_script: input.phoneScript,
+      internal_whatsapp_post: input.internalWhatsappPost,
+      reason: input.reason,
+    }),
+  });
+
+  if (!response.ok) {
+    const reason = await readError(response);
+    console.error('[client/leads/edit-draft] fail', {
+      leadId,
+      status: response.status,
+      ms: Date.now() - startedAt,
+      reason,
+    });
+    throw new Error('Could not save draft edits.');
+  }
+
+  const data: BackendLead = await response.json();
+  console.log('[client/leads/edit-draft] success', { leadId, status: data.status, ms: Date.now() - startedAt });
+  return mapBackendLeadToLead(data);
+}
+
 export async function listAuditEvents(leadId: string): Promise<BackendAuditEvent[]> {
   console.log('[client/leads/audit] enter', { leadId });
   const startedAt = Date.now();
-  const response = await fetch(`${API_BASE_URL}/api/v1/leads/${leadId}/audit-events`);
+  const response = await authFetch(`${API_BASE_URL}/api/v1/leads/${leadId}/audit-events`);
 
   if (!response.ok) {
     const message = await response.text();

@@ -5,10 +5,9 @@ from dataclasses import dataclass
 from app.config import Settings
 from app.repositories.leads import LeadRecord, LeadRepository
 from app.schemas import LeadScoreResult
-from app.services.gemini_extraction import EXTRACTION_TEMPERATURE
-from app.services.kimi_triage import KIMI_TEMPERATURE, KimiTriageService
+from app.services.llm_factory import TriageService, get_extraction_service, get_triage_service
+from app.services.routing import LeadRoutingService
 from app.services.qualification_rules import DNQ_REASONS, QualificationResult, qualify_lead
-from app.services.shengsuanyun_extraction import ShengSuanYunExtractionService
 
 logger = logging.getLogger("lead_triage.services.lead_pipeline")
 
@@ -31,12 +30,25 @@ def deterministic_dnq_score(reason: str, risk_flags: tuple[str, ...]) -> LeadSco
     )
 
 
+def draft_provider(result, triage: TriageService | None = None) -> str:
+    return "template" if getattr(result, "template_id", None) else (triage.provider if triage else "llm")
+
+
+def draft_model(result, triage: TriageService) -> str:
+    return getattr(result, "template_id", None) or triage.draft_model
+
+
+def draft_temperature(result, triage: TriageService) -> float:
+    return 0.0 if draft_provider(result, triage) == "template" else triage.draft_temperature
+
+
 class LeadPipelineService:
     def __init__(self, repo: LeadRepository, settings: Settings) -> None:
         self.repo = repo
         self.settings = settings
-        self.extraction = ShengSuanYunExtractionService(settings)
-        self.triage = KimiTriageService(settings)
+        self.extraction = get_extraction_service(settings)
+        self.triage = get_triage_service(settings)
+        self.routing = LeadRoutingService(repo.pool) if hasattr(repo, "pool") else None
 
     async def run(self, lead: LeadRecord, *, skip_extraction: bool = False) -> PipelineRun:
         started_at = time.perf_counter()
@@ -59,9 +71,9 @@ class LeadPipelineService:
             current = await self.repo.persist_extracted_fields(
                 lead_id=lead.lead_id,
                 extracted=extracted,
-                provider="shengsuanyun",
-                model=self.settings.shengsuanyun_model,
-                temperature=EXTRACTION_TEMPERATURE,
+                provider=self.extraction.provider,
+                model=self.extraction.model,
+                temperature=self.extraction.temperature,
                 actor="pipeline",
             )
             if current is None:
@@ -106,8 +118,8 @@ class LeadPipelineService:
             score_model = "dnq-hard-rules-v1"
         else:
             score = await self.triage.score_lead(current)
-            score_provider = "kimi"
-            score_model = self.settings.kimi_model
+            score_provider = self.triage.provider
+            score_model = self.triage.score_model
 
         if not score_already_persisted:
             current = await self.repo.persist_score(
@@ -115,7 +127,7 @@ class LeadPipelineService:
                 result=score,
                 provider=score_provider,
                 model=score_model,
-                temperature=KIMI_TEMPERATURE,
+                temperature=0.0 if scoring_skipped else self.triage.score_temperature,
                 actor="pipeline",
             )
             if current is None:
@@ -133,13 +145,16 @@ class LeadPipelineService:
         current = await self.repo.persist_drafts(
             lead_id=lead.lead_id,
             result=drafts,
-            provider="kimi",
-            model=self.settings.kimi_model,
-            temperature=KIMI_TEMPERATURE,
+            provider=draft_provider(drafts, self.triage),
+            model=draft_model(drafts, self.triage),
+            temperature=draft_temperature(drafts, self.triage),
             actor="pipeline",
         )
         if current is None:
             raise LookupError("Lead disappeared while persisting drafts")
+
+        if self.routing is not None:
+            await self.routing.route_after_draft(current)
 
         logger.info(
             "[pipeline/lead] success %s",

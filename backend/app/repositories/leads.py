@@ -68,6 +68,7 @@ class LeadRecord:
     drafted_at: datetime | None
     source_box: str
     lead_source: str | None
+    assigned_consultant: str | None
     raw_message: str
     status: LeadStatus
     created_at: datetime
@@ -155,6 +156,7 @@ def row_to_lead(row: asyncpg.Record) -> LeadRecord:
         drafted_at=row["drafted_at"],
         source_box=row["source_box"],
         lead_source=row["lead_source"],
+        assigned_consultant=row["assigned_consultant"],
         raw_message=row["raw_message"],
         status=LeadStatus(row["status"]),
         created_at=row["created_at"],
@@ -206,6 +208,63 @@ class LeadRepository:
                     "lead.received.manual",
                     "system",
                     '{"source":"manual_api"}',
+                )
+        return row_to_lead(row)
+
+    async def create_form_webhook_lead(
+        self,
+        lead_id: str,
+        payload: ManualLeadCreate,
+        *,
+        form_name: str | None,
+        field_count: int,
+    ) -> LeadRecord:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO leads (
+                        lead_id,
+                        sender_name,
+                        email_address,
+                        contact_number,
+                        email_domain,
+                        visa_category,
+                        source_box,
+                        lead_source,
+                        raw_message,
+                        status
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    RETURNING *
+                    """,
+                    lead_id,
+                    payload.sender_name,
+                    str(payload.email_address),
+                    payload.contact_number,
+                    email_domain(str(payload.email_address)),
+                    payload.visa_category,
+                    payload.source_box.value,
+                    payload.lead_source,
+                    payload.raw_message,
+                    LeadStatus.RECEIVED.value,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO audit_events (lead_id, event_type, actor, metadata)
+                    VALUES ($1, $2, $3, $4::jsonb)
+                    """,
+                    lead_id,
+                    "lead.received.form_webhook",
+                    "form_webhook",
+                    json.dumps(
+                        {
+                            "source": "form_webhook",
+                            "form_name": form_name,
+                            "field_count": field_count,
+                            "lead_source_present": bool(payload.lead_source),
+                        }
+                    ),
                 )
         return row_to_lead(row)
 
@@ -480,6 +539,286 @@ class LeadRepository:
                 )
         return row_to_lead(row)
 
+    async def edit_fields(
+        self,
+        lead_id: str,
+        actor: str,
+        fields: dict[str, Any],
+    ) -> LeadRecord | None:
+        column_map = {
+            "name": "sender_name",
+            "email": "email_address",
+            "phone": "contact_number",
+            "visa_category": "visa_category",
+            "source": "lead_source",
+            "assigned_consultant": "assigned_consultant",
+            "brand": "source_box",
+        }
+        editable_keys = set(column_map)
+        unknown_keys = sorted(set(fields) - editable_keys)
+        if unknown_keys:
+            raise ValueError(f"Unsupported lead edit fields: {', '.join(unknown_keys)}")
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                current = await conn.fetchrow(
+                    """
+                    SELECT sender_name, email_address, contact_number, visa_category,
+                           lead_source, assigned_consultant, source_box
+                    FROM leads
+                    WHERE lead_id = $1
+                    FOR UPDATE
+                    """,
+                    lead_id,
+                )
+                if current is None:
+                    return None
+
+                updates: dict[str, Any] = {}
+                changed_fields: list[str] = []
+                for key, value in fields.items():
+                    column = column_map[key]
+                    normalized = value
+                    if isinstance(normalized, str):
+                        normalized = normalized.strip()
+                    if key in {"phone", "visa_category", "source", "assigned_consultant"} and normalized == "":
+                        normalized = None
+                    if key in {"name", "email", "brand"} and not normalized:
+                        continue
+                    if current[column] != normalized:
+                        updates[column] = normalized
+                        changed_fields.append(key)
+
+                if not updates:
+                    row = await conn.fetchrow("SELECT * FROM leads WHERE lead_id = $1", lead_id)
+                    return row_to_lead(row)
+
+                set_clauses: list[str] = []
+                values: list[Any] = [lead_id]
+                for column, value in updates.items():
+                    values.append(value)
+                    set_clauses.append(f"{column} = ${len(values)}")
+                if "email_address" in updates:
+                    values.append(email_domain(str(updates["email_address"])))
+                    set_clauses.append(f"email_domain = ${len(values)}")
+                set_clauses.append("updated_at = NOW()")
+
+                row = await conn.fetchrow(
+                    f"""
+                    UPDATE leads
+                    SET {", ".join(set_clauses)}
+                    WHERE lead_id = $1
+                    RETURNING *
+                    """,
+                    *values,
+                )
+
+                for field in changed_fields:
+                    await conn.execute(
+                        """
+                        INSERT INTO audit_events (lead_id, event_type, actor, metadata)
+                        VALUES ($1, $2, $3, $4::jsonb)
+                        """,
+                        lead_id,
+                        "lead.fields.edited",
+                        actor,
+                        json.dumps({"field": field, "changed": True}),
+                    )
+        return row_to_lead(row)
+
+    async def approve_for_send(self, lead_id: str, actor: str) -> tuple[LeadRecord | None, str | None]:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                current = await conn.fetchrow(
+                    "SELECT status FROM leads WHERE lead_id = $1 FOR UPDATE",
+                    lead_id,
+                )
+                if current is None:
+                    return None, None
+
+                previous_actor = await conn.fetchval(
+                    """
+                    SELECT actor
+                    FROM audit_events
+                    WHERE lead_id = $1
+                      AND event_type IN ('lead.review.submitted', 'lead.drafts.edited')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    lead_id,
+                )
+                if previous_actor == actor:
+                    return None, "same_actor"
+
+                row = await conn.fetchrow(
+                    """
+                    UPDATE leads
+                    SET status = 'sent', updated_at = NOW()
+                    WHERE lead_id = $1
+                    RETURNING *
+                    """,
+                    lead_id,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO audit_events (lead_id, event_type, actor, metadata)
+                    VALUES ($1, $2, $3, $4::jsonb)
+                    """,
+                    lead_id,
+                    "lead.approved",
+                    actor,
+                    json.dumps(
+                        {
+                            "previous_status": current["status"],
+                            "four_eye_source_actor": previous_actor,
+                        }
+                    ),
+                )
+        return row_to_lead(row), None
+
+    async def reject_review(self, lead_id: str, actor: str, reason: str | None) -> LeadRecord | None:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                current = await conn.fetchrow(
+                    "SELECT status FROM leads WHERE lead_id = $1 FOR UPDATE",
+                    lead_id,
+                )
+                if current is None:
+                    return None
+
+                row = await conn.fetchrow(
+                    """
+                    UPDATE leads
+                    SET status = 'drafted', updated_at = NOW()
+                    WHERE lead_id = $1
+                    RETURNING *
+                    """,
+                    lead_id,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO audit_events (lead_id, event_type, actor, metadata)
+                    VALUES ($1, $2, $3, $4::jsonb)
+                    """,
+                    lead_id,
+                    "lead.review.rejected",
+                    actor,
+                    json.dumps(
+                        {
+                            "previous_status": current["status"],
+                            "reason_present": bool(reason),
+                            "reason_length": len(reason or ""),
+                        }
+                    ),
+                )
+        return row_to_lead(row)
+
+    async def confirm_rejection(self, lead_id: str, actor: str, reason: str | None) -> LeadRecord | None:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                current = await conn.fetchrow(
+                    "SELECT status, dnq_reason FROM leads WHERE lead_id = $1 FOR UPDATE",
+                    lead_id,
+                )
+                if current is None:
+                    return None
+
+                row = await conn.fetchrow(
+                    """
+                    UPDATE leads
+                    SET status = 'dnq', updated_at = NOW()
+                    WHERE lead_id = $1
+                    RETURNING *
+                    """,
+                    lead_id,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO audit_events (lead_id, event_type, actor, metadata)
+                    VALUES ($1, $2, $3, $4::jsonb)
+                    """,
+                    lead_id,
+                    "lead.reject.confirmed",
+                    actor,
+                    json.dumps(
+                        {
+                            "previous_status": current["status"],
+                            "dnq_reason": current["dnq_reason"],
+                            "reason_present": bool(reason),
+                            "reason_length": len(reason or ""),
+                        }
+                    ),
+                )
+        return row_to_lead(row)
+
+    async def edit_draft(
+        self,
+        lead_id: str,
+        actor: str,
+        *,
+        email_draft: str | None,
+        whatsapp_draft: str | None,
+        phone_script: str | None,
+        internal_whatsapp_post: str | None,
+        reason: str | None,
+    ) -> LeadRecord | None:
+        changed_fields = [
+            name
+            for name, value in [
+                ("email_draft", email_draft),
+                ("whatsapp_draft", whatsapp_draft),
+                ("phone_script", phone_script),
+                ("internal_whatsapp_post", internal_whatsapp_post),
+            ]
+            if value is not None
+        ]
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                current = await conn.fetchrow(
+                    "SELECT status FROM leads WHERE lead_id = $1 FOR UPDATE",
+                    lead_id,
+                )
+                if current is None:
+                    return None
+
+                row = await conn.fetchrow(
+                    """
+                    UPDATE leads
+                    SET
+                        email_draft = COALESCE($2, email_draft),
+                        whatsapp_draft = COALESCE($3, whatsapp_draft),
+                        phone_script = COALESCE($4, phone_script),
+                        internal_whatsapp_post = COALESCE($5, internal_whatsapp_post),
+                        status = 'in_review',
+                        updated_at = NOW()
+                    WHERE lead_id = $1
+                    RETURNING *
+                    """,
+                    lead_id,
+                    email_draft,
+                    whatsapp_draft,
+                    phone_script,
+                    internal_whatsapp_post,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO audit_events (lead_id, event_type, actor, metadata)
+                    VALUES ($1, $2, $3, $4::jsonb)
+                    """,
+                    lead_id,
+                    "lead.drafts.edited",
+                    actor,
+                    json.dumps(
+                        {
+                            "previous_status": current["status"],
+                            "changed_fields": changed_fields,
+                            "reason_present": bool(reason),
+                            "reason_length": len(reason or ""),
+                        }
+                    ),
+                )
+        return row_to_lead(row)
+
     async def persist_qualification(
         self,
         lead_id: str,
@@ -566,6 +905,7 @@ class LeadRepository:
                         score_temperature = $9,
                         scored_at = NOW(),
                         status = CASE
+                            WHEN $3 = 'low' THEN 'in_review'
                             WHEN status IN ('received', 'contacted') THEN 'scored'
                             ELSE status
                         END,
@@ -667,6 +1007,12 @@ class LeadRepository:
                             "provider": provider,
                             "model": model,
                             "temperature": temperature,
+                            "template_id": result.template_id,
+                            "fee_source": result.fee_source,
+                            "professional_fee_zar": result.professional_fee_zar,
+                            "admin_fee_zar": result.admin_fee_zar,
+                            "dnq_reason": result.dnq_reason,
+                            "alternative_suggestions": result.alternative_suggestions,
                             "has_whatsapp": bool(result.whatsapp_draft),
                             "has_phone_script": bool(result.phone_script),
                             "has_internal_post": bool(result.internal_whatsapp_post),

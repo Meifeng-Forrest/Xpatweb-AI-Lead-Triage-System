@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS leads (
     drafted_at TIMESTAMPTZ,
     source_box TEXT NOT NULL,
     lead_source TEXT,
+    assigned_consultant TEXT,
     raw_message TEXT NOT NULL,
     status TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -115,6 +116,7 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS draft_provider TEXT;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS draft_model TEXT;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS draft_temperature NUMERIC;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS drafted_at TIMESTAMPTZ;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS assigned_consultant TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_leads_email_coherence_created_at
     ON leads (email_coherence, created_at DESC);
@@ -132,6 +134,80 @@ CREATE TABLE IF NOT EXISTS audit_events (
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_lead_id_created_at
     ON audit_events (lead_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS users (
+    user_id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_roles (
+    user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, role)
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
+CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles (role);
+
+CREATE TABLE IF NOT EXISTS routing_rules (
+    category TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (category, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_routing_rules_category ON routing_rules (category);
+
+-- 角色从“权限+路由信箱”收敛为纯权限。这里先插新角色再删除旧角色，
+-- 避免同一用户同时有 lead_agent/team_lead 时直接 UPDATE 撞主键。
+INSERT INTO user_roles (user_id, role)
+    SELECT user_id, 'agent' FROM user_roles WHERE role IN ('lead_agent', 'team_lead')
+    ON CONFLICT DO NOTHING;
+INSERT INTO user_roles (user_id, role)
+    SELECT user_id, 'reviewer' FROM user_roles WHERE role IN ('escalation_handler', 'visa_verifier')
+    ON CONFLICT DO NOTHING;
+DELETE FROM user_roles WHERE role IN ('lead_agent', 'team_lead', 'escalation_handler', 'visa_verifier');
+
+-- 角色按职责重切：admin 改名为 superadmin，业务审批另由 approver 承担。
+-- 保留 user_roles 多对多表结构，只在服务层限制一人一角色，方便未来放开。
+INSERT INTO user_roles (user_id, role)
+    SELECT user_id, 'superadmin' FROM user_roles WHERE role = 'admin'
+    ON CONFLICT DO NOTHING;
+DELETE FROM user_roles WHERE role = 'admin';
+
+CREATE TABLE IF NOT EXISTS user_audit_events (
+    event_id BIGSERIAL PRIMARY KEY,
+    target_user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_audit_events_target_created_at
+    ON user_audit_events (target_user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS research_briefs (
+    lead_id TEXT PRIMARY KEY REFERENCES leads(lead_id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    task_id TEXT,
+    brief JSONB,
+    source_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+    error_type TEXT,
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_briefs_status_updated_at
+    ON research_briefs (status, updated_at DESC);
 """
 
 
@@ -153,7 +229,10 @@ async def init_schema(pool: asyncpg.Pool) -> None:
     logger.info("[db/schema] enter %s", {"operation": "create_if_missing"})
     async with pool.acquire() as conn:
         await conn.execute(SCHEMA_SQL)
-    logger.info("[db/schema] success %s", {"tables": ["leads", "audit_events"]})
+    logger.info(
+        "[db/schema] success %s",
+        {"tables": ["leads", "audit_events", "users", "user_roles", "routing_rules", "user_audit_events", "research_briefs"]},
+    )
 
 
 @asynccontextmanager
@@ -162,6 +241,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     pool = await create_pool(settings)
     app.state.db_pool = pool
     await init_schema(pool)
+    from app.services.auth import seed_default_users
+
+    await seed_default_users(pool, settings)
     try:
         yield
     finally:

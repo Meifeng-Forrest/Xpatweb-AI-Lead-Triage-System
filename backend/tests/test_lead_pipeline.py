@@ -39,6 +39,9 @@ def extracted_fields(**overrides):
 class FakeExtraction:
     def __init__(self, extracted: ExtractedEmailFields) -> None:
         self.extracted = extracted
+        self.provider = "fake-extraction"
+        self.model = "fake-extract-model"
+        self.temperature = 0.0
 
     async def extract_manual_text(self, _raw_text):
         return self.extracted
@@ -47,6 +50,11 @@ class FakeExtraction:
 class FakeTriage:
     def __init__(self) -> None:
         self.score_calls = 0
+        self.provider = "fake-triage"
+        self.score_model = "fake-score-model"
+        self.draft_model = "fake-draft-model"
+        self.score_temperature = 0.3
+        self.draft_temperature = 0.4
 
     async def score_lead(self, _lead):
         self.score_calls += 1

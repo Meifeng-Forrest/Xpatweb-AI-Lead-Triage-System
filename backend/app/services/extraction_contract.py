@@ -1,17 +1,9 @@
 import json
-import logging
-import time
 from typing import Any
 
-import httpx
 from pydantic import ValidationError
 
-from app.config import Settings
-from app.logging import summarize_text
 from app.schemas import EmailExtractionRequest, ExtractedEmailFields
-from app.services.gemini_http import gemini_error_summary
-
-logger = logging.getLogger("lead_triage.services.gemini_extraction")
 
 
 EXTRACTION_TEMPERATURE = 0.0
@@ -98,8 +90,30 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
 }
 
 
-def build_extraction_prompt(payload: EmailExtractionRequest) -> str:
-    # 提取 Prompt 只让模型填字段，不允许它顺手评分；评分会在后续独立步骤处理。
+def schema_instruction(schema: dict[str, Any]) -> str:
+    return f"Return one JSON object matching this JSON Schema:\n{json.dumps(schema, ensure_ascii=False)}"
+
+
+def build_manual_extraction_prompt(raw_text: str) -> str:
+    # 业务合同只描述“要提取什么”，具体用哪家模型由 adapter 决定。
+    return f"""
+You are a field extraction assistant for Xpatweb, a South African immigration consultancy.
+Extract the structured fields from the pasted inquiry below.
+Do NOT score, qualify, reject, draft a reply, or infer the receiving brand.
+Do not invent facts. If a field is absent, output null, except:
+- sender_name must be "Not Provided" when absent
+- urgency_flag and multi_visa_flag must be false when absent
+- email_coherence must be high, medium, or low
+
+{schema_instruction(EXTRACTION_SCHEMA)}
+
+PASTED INQUIRY:
+{raw_text}
+""".strip()
+
+
+def build_email_extraction_prompt(payload: EmailExtractionRequest) -> str:
+    # 邮件入口保留 source_box 线索；手动粘贴入口不推断品牌，避免覆盖用户选择。
     return f"""
 You are a field extraction assistant for Xpatweb, a South African immigration consultancy.
 The brand receiving this lead is: {payload.source_box.value} (XP / RISA / VLS / SMV).
@@ -107,6 +121,8 @@ The brand receiving this lead is: {payload.source_box.value} (XP / RISA / VLS / 
 Extract fields from the incoming inquiry. Do NOT score, qualify, reject, or draft a reply.
 If a field is not present, output null, except sender_name should be "Not Provided".
 Do not invent facts. Use only the subject, from header, and body below.
+
+{schema_instruction(EXTRACTION_SCHEMA)}
 
 Email subject:
 {payload.email_subject or ""}
@@ -119,79 +135,8 @@ Email body:
 """.strip()
 
 
-def gemini_endpoint(settings: Settings) -> str:
-    return f"{settings.gemini_base_url.rstrip('/')}/v1beta/models/{settings.gemini_model_extract}:generateContent"
-
-
-def extract_text_from_gemini_response(data: dict[str, Any]) -> str:
+def validate_extracted_fields(data: dict[str, Any]) -> ExtractedEmailFields:
     try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise ValueError("Gemini response did not contain generated JSON text") from exc
-
-
-class GeminiExtractionService:
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-
-    async def extract_email_fields(self, payload: EmailExtractionRequest) -> ExtractedEmailFields:
-        if not self.settings.gemini_api_key:
-            raise RuntimeError("GEMINI_API_KEY is not configured")
-
-        prompt = build_extraction_prompt(payload)
-        summary = {
-            "source_box": payload.source_box.value,
-            "model": self.settings.gemini_model_extract,
-            "temperature": EXTRACTION_TEMPERATURE,
-            "subject": summarize_text(payload.email_subject),
-            "body": summarize_text(payload.email_body),
-        }
-        logger.info("[llm/gemini/extract] enter %s", summary)
-        started_at = time.perf_counter()
-
-        request_body = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": EXTRACTION_TEMPERATURE,
-                "responseMimeType": "application/json",
-                "responseJsonSchema": EXTRACTION_SCHEMA,
-            },
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=45) as client:
-                response = await client.post(
-                    gemini_endpoint(self.settings),
-                    headers={
-                        "Content-Type": "application/json",
-                        "x-goog-api-key": self.settings.gemini_api_key,
-                    },
-                    json=request_body,
-                )
-            response.raise_for_status()
-            text = extract_text_from_gemini_response(response.json())
-            extracted = ExtractedEmailFields.model_validate(json.loads(text))
-        except (httpx.HTTPError, json.JSONDecodeError, ValidationError, ValueError) as exc:
-            logger.exception(
-                "[llm/gemini/extract] fail %s",
-                {
-                    "source_box": payload.source_box.value,
-                    "model": self.settings.gemini_model_extract,
-                    "ms": round((time.perf_counter() - started_at) * 1000),
-                    **gemini_error_summary(exc),
-                    "error": str(exc)[:300],
-                },
-            )
-            raise
-
-        logger.info(
-            "[llm/gemini/extract] success %s",
-            {
-                "source_box": payload.source_box.value,
-                "model": self.settings.gemini_model_extract,
-                "ms": round((time.perf_counter() - started_at) * 1000),
-                "visa_category_present": bool(extracted.visa_category),
-                "email_coherence": extracted.email_coherence,
-            },
-        )
-        return extracted
+        return ExtractedEmailFields.model_validate(data)
+    except ValidationError:
+        raise

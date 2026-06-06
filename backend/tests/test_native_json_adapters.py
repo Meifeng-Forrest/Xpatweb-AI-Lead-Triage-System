@@ -2,12 +2,12 @@ import unittest
 
 import httpx
 
-from app.services.gemini_http import gemini_error_summary
+from app.services.native_json_adapters import provider_error_summary
 
 
-class GeminiHttpTest(unittest.TestCase):
-    def test_extracts_safe_google_error_codes(self) -> None:
-        request = httpx.Request("POST", "https://generativelanguage.googleapis.com/test")
+class NativeJsonAdaptersTest(unittest.TestCase):
+    def test_extracts_safe_provider_error_codes(self) -> None:
+        request = httpx.Request("POST", "https://provider.example/test")
         response = httpx.Response(
             400,
             request=request,
@@ -21,7 +21,7 @@ class GeminiHttpTest(unittest.TestCase):
         error = httpx.HTTPStatusError("bad request", request=request, response=response)
 
         self.assertEqual(
-            gemini_error_summary(error),
+            provider_error_summary(error),
             {
                 "status_code": 400,
                 "error_status": "INVALID_ARGUMENT",

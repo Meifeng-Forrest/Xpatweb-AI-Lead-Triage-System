@@ -1,0 +1,141 @@
+[
+  {
+    "id": "dnq_01_critical_skills_without_offer",
+    "as_of": "2026-06-05",
+    "input": {
+      "visa_category": "Critical Skills Work Visa",
+      "has_job_offer": false
+    },
+    "expected": {
+      "is_dnq": true,
+      "dnq_reason": "DNQ-01",
+      "risk_flags": []
+    }
+  },
+  {
+    "id": "dnq_02_pr_without_current_visa",
+    "as_of": "2026-06-05",
+    "input": {
+      "visa_category": "PR (Financially Independent)",
+      "current_visa": null
+    },
+    "expected": {
+      "is_dnq": true,
+      "dnq_reason": "DNQ-02",
+      "risk_flags": []
+    }
+  },
+  {
+    "id": "dnq_03_work_pr_under_four_years",
+    "as_of": "2026-06-05",
+    "input": {
+      "visa_category": "Permanent Residence Permit",
+      "current_visa": "General Work Visa",
+      "pr_route": "work_visa",
+      "qualifying_work_visa_years": 3.5
+    },
+    "expected": {
+      "is_dnq": true,
+      "dnq_reason": "DNQ-03",
+      "risk_flags": []
+    }
+  },
+  {
+    "id": "dnq_04_unregistered_spousal_path",
+    "as_of": "2026-06-05",
+    "input": {
+      "visa_category": "Visitors Visa Section 11(6)",
+      "marriage_type": "unregistered"
+    },
+    "expected": {
+      "is_dnq": true,
+      "dnq_reason": "DNQ-04",
+      "risk_flags": []
+    }
+  },
+  {
+    "id": "dnq_05_late_appeal",
+    "as_of": "2026-06-05",
+    "input": {
+      "visa_category": "Appeal Application",
+      "rejection_date": "2026-05-15"
+    },
+    "expected": {
+      "is_dnq": true,
+      "dnq_reason": "DNQ-05",
+      "risk_flags": []
+    }
+  },
+  {
+    "id": "dnq_06_visa_exempt_visitor_11_1",
+    "as_of": "2026-06-05",
+    "input": {
+      "visa_category": "Visitors Visa Section 11(1)",
+      "is_first_world": true
+    },
+    "expected": {
+      "is_dnq": true,
+      "dnq_reason": "DNQ-06",
+      "risk_flags": []
+    }
+  },
+  {
+    "id": "risk_01_pbs_low_salary_soft_only",
+    "as_of": "2026-06-05",
+    "input": {
+      "visa_category": "Points-Based System",
+      "annual_salary_zar": 600000,
+      "pbs_total_score_below_100": false
+    },
+    "expected": {
+      "is_dnq": false,
+      "dnq_reason": null,
+      "risk_flags": [
+        "RISK-01"
+      ]
+    }
+  },
+  {
+    "id": "risk_02_weak_visitor_11_6_soft_only",
+    "as_of": "2026-06-05",
+    "input": {
+      "visa_category": "Visitors Visa Section 11(6)",
+      "marriage_type": "registered",
+      "relationship_duration": "weak_evidence"
+    },
+    "expected": {
+      "is_dnq": false,
+      "dnq_reason": null,
+      "risk_flags": [
+        "RISK-02"
+      ]
+    }
+  },
+  {
+    "id": "unknown_job_offer_not_auto_dnq",
+    "as_of": "2026-06-05",
+    "input": {
+      "visa_category": "Critical Skills Work Visa",
+      "has_job_offer": null
+    },
+    "expected": {
+      "is_dnq": false,
+      "dnq_reason": null,
+      "risk_flags": []
+    }
+  },
+  {
+    "id": "good_retired_person_no_risk",
+    "as_of": "2026-06-05",
+    "input": {
+      "visa_category": "Retired Person Visa",
+      "net_worth_indicator": "stable retirement income",
+      "email_coherence": "high"
+    },
+    "expected": {
+      "is_dnq": false,
+      "dnq_reason": null,
+      "risk_flags": []
+    }
+  }
+]

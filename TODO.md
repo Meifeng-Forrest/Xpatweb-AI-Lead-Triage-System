@@ -19,10 +19,23 @@
 - 评分徽章（GD/MF/MD/BD + 置信度）、状态徽章
 - 手动录入表单（姓名/邮箱/签证类型/品牌）→ 触发 AI triage
 - 审核队列列表页、分析页（图表为随机/硬编码数据）
-- `geminiService.ts`：`triageLead`（解析+评分+起草合并一次调用）、`generateResearchBrief`
+- `researchService.ts`：保留旧前端同步 `generateResearchBrief`（仍待迁移到后端异步 Web Search / LLM adapter）
 - 3 条写死的 mock 数据（`src/mockData.ts`）、内存态管理（`useState`）
 
-**关键事实：当前已有 FastAPI + Celery Worker + PostgreSQL + Redis 的 Docker Compose 后端；Manual Entry 已实现“自然语言粘贴 → ShengSuanYun 提取 → 用户确认/修改 → DNQ → Kimi 评分/起草 → 详情轮询”的两步闭环。前端启动时会优先加载后端真实线索；真实邮箱/表单接入、Sheets 写入、真实通知与鉴权尚未接通。**
+**关键事实：当前已有 FastAPI + Celery Worker + PostgreSQL + Redis 的 Docker Compose 后端；Manual Entry 已实现“自然语言粘贴 → LLM 提取 adapter → 用户确认/修改 → DNQ → LLM 评分/模板或 LLM 起草 → 详情轮询”的两步闭环。默认 adapter 仍为 Shengsuanyun 提取、Kimi 评分/非模板起草；前端启动时会优先加载后端真实线索；轻量 JWT 鉴权与管理员用户管理已接通；真实邮箱/表单接入、Sheets 写入、真实通知尚未接通。**
+
+---
+
+## 已完成模块（详见 prd/）
+
+> 已稳定完成且验证通过的功能块已卸货到 `prd/`，TODO 仅保留索引与未完成项。
+
+- 后端基础设施（FastAPI/Docker/PostgreSQL/Celery/审计/CRUD API）→ `prd/backend-infrastructure.md`（2026-06-05）
+- 线索评分 DNQ 硬规则 + 软风险标记 → `prd/lead-scoring.md`（2026-06-05）
+- 回复模板库 + 费用硬编码 + DNQ 拒绝模板 → `prd/reply-drafting.md`（2026-06-05）
+- LLM 业务合同与供应商解耦 → `prd/llm-contract-layer.md`（2026-06-05）
+- Manual Entry 两步引导式闭环 → `prd/manual-entry.md`（2026-06-05）
+- 用户 / 角色 / 权限与管理员用户管理 → `prd/user-management.md`（2026-06-06，已按 5 角色 + 路由并入 Users 表更新）
 
 ---
 
@@ -33,41 +46,20 @@
 > LLM 用 Gemini（结构化字段提取、评分、起草均在后端服务层执行；提取 temperature=0）；
 > 邮件接入用 Microsoft Graph（Client Credentials Flow，App Registration 已建好）。
 
-- **1.1 LLM 服务层迁移：前端 Gemini → 后端分步模型调用** 🔴
-  - 现状：`src/services/geminiService.ts` 用 `@google/genai` + `GEMINI_API_KEY` + 模型 `gemini-3-flash-preview` / `gemini-3.1-pro-preview`
-  - 目标：Gemini Flash/Pro（结构化提取、评分、起草，提取 temperature=0）；所有密钥只在后端读取
-  - 待办：在 FastAPI 后端实现 service 层 → structured output / JSON Schema 保证字段 schema 一致 → 后续把前端 triage 调用迁到后端
-  - 进度：2026-06-04，本轮已补齐 `.env` 的 Kimi/Gemini 相关变量，并让后端配置读取 `LLM_`*、`KIMI_*`、`GEMINI_*`；前端 Gemini 模型名已改为环境变量。后续决策已改为 Gemini 后端服务层，不再以 Kimi 作为主链路。
-  - 进度：2026-06-04（补充），按用户决策将“结构化提取”改为 Gemini Flash + `temperature=0`；新增后端 `/api/v1/extraction/email` 和 Gemini 提取 service。受当前本机网络到 `generativelanguage.googleapis.com` 超时影响，真实 Gemini 回包暂未验通。
-  - 进度：2026-06-04（补充），按用户决策评分/起草也继续用 Gemini；新增 `GeminiTriageService`、`POST /api/v1/leads/{lead_id}/score`、`POST /api/v1/leads/{lead_id}/drafts`，并提供 `PUT` 写回接口用于离线验证。真实请求已到达 Google，但当前 Key 无效。
-  - ⚠️ 阻塞：2026-06-04 真实请求已确认可到达 Google，但 Google 返回 `API_KEY_INVALID`；需在 `.env` 更换有效 `GEMINI_API_KEY` 后复测完整流水线
-  - 2026-06-04：Manual Entry 主链路已改为 ShengSuanYun `google/gemini-3-flash` 提取、Kimi `kimi-k2.6` 评分/起草；Kimi 结构化业务调用关闭思考模式，不再依赖无效 Gemini Key
-- **1.2 搭建 FastAPI 后端 + Docker Compose 骨架** 🔴 ✅（2026-06-04）
-  - 一份 `docker-compose.yml` 编排 app + postgres + redis，`.env` 注入（`.env` 已建；`.env.example` 已删除，仓库不留模板）
-  - 邮箱 OAuth、调研、API Key 安全必须在后端，**不能前端裸跑**
-  - 2026-06-04：新增 `backend/` FastAPI 骨架、`docker-compose.yml`、PostgreSQL/Redis 编排、健康检查 `/healthz`
-  - 2026-06-04：新增手动线索 API 占位 `/api/v1/leads/manual`，日志只记录邮箱域名、输入长度、来源箱等脱敏摘要
-  - 2026-06-04：预留通知/CRM 插座接口（Console/Noop 实现），后续客户确认 Slack/CRM 后替换真实实现
-  - 2026-06-04：应用启动时创建数据库连接池并初始化 `leads` / `audit_events` 表
-  - 2026-06-04：新增独立 Celery worker 容器，使用 Redis broker/result backend、单并发、晚确认、worker 丢失重投，并以非 root 用户运行
+- **1.1 LLM 服务层迁移：前端 → 后端分步模型调用** 🔴（进行中）
+  - **已归档**：业务合同与供应商解耦（`extraction_contract`/`triage_contract`/`llm_factory` + 按协议命名 adapter）→ `prd/llm-contract-layer.md`（2026-06-05）。默认主链路：Shengsuanyun 提取 + Kimi 评分/非模板起草 + 模板优先。
+  - 前端 `researchService.ts` 的 `generateResearchBrief` 迁移到后端异步 Web Search / LLM adapter（见 §10）
+  - 更换有效 Key 后真实 LLM 提取→评分→起草全链路复测（依赖 §2.3）
+- **1.2 FastAPI 后端 + Docker Compose 骨架** ✅（2026-06-04）
+  - **已归档** → `prd/backend-infrastructure.md`（含容器编排、健康检查、插座接口、Celery worker）
 - **1.3 PostgreSQL 数据持久化**（自建，不用 Supabase）（进行中）
-  - 现状：后端手动线索 API 已可写入 PostgreSQL；前端启动时已能从后端读取真实线索列表
-  - 待办：建 Lead 表与状态机；OneSheet 字段对照 `业务规格.md §8`（Sheets 同步作为 Phase 2 可选导出）
-  - 2026-06-04：新增 `leads` 表，覆盖手动入站的核心字段：姓名、邮箱、邮箱域名、电话、签证类别、来源箱、来源代码、原始消息、状态、创建/更新时间
-  - 2026-06-04：新增 `audit_events` 表，手动线索落库时写入 `lead.received.manual`
-  - 2026-06-04：`POST /api/v1/leads/manual` 已从“接收占位”升级为“落库 + 写审计”；新增 `GET /api/v1/leads/{lead_id}` 读取接口
-  - 2026-06-04：真实 Docker 联调通过：`/healthz` 200，手动创建线索后可按 `lead_id` 读回；数据库计数 `leads=2`、`audit_events=2`
-  - 2026-06-04：前端手动录入已改为先调用后端 `POST /api/v1/leads/manual`，再把后端返回的 `lead_id`/`created_at` 放入前端列表
-  - 2026-06-04：新增 `GET /api/v1/leads?limit=...` 列表接口，前端启动时优先从后端加载真实线索，后端不可用时提示并保留 mock 数据
-  - 2026-06-04：新增 `PATCH /api/v1/leads/{lead_id}/status`，状态更新写入 `leads.status/updated_at` 并追加 `lead.status_changed` 审计事件；前端状态按钮已接后端
-  - 2026-06-04：扩展 `leads` 表，新增 PRD 提取字段列、`extracted_fields` JSONB 快照、`extracted_at`、提取 provider/model/temperature；新增 `PUT /api/v1/leads/{lead_id}/extracted-fields` 写回接口，并追加 `lead.extracted_fields.persisted` 审计事件
-  - 2026-06-04：扩展 `leads` 表，新增 `lead_score`、`score_confidence`、`score_rationale`、`escalation_flag`、草稿字段、评分/起草 provider/model/temperature 与时间戳；评分/草稿写回会生成审计事件
-  - 下步：把状态枚举从当前 UI 操作态逐步收敛到 PRD 完整生命周期；把 Graph/表单入站接入同一流水线
-  - 2026-06-04：手动入站会自动触发“提取 → DNQ → 评分 → 起草”后台流水线；新增 `POST /api/v1/leads/{lead_id}/pipeline` 支持单条重跑
-  - 2026-06-04：后台流水线已迁移到 Celery 可靠队列；手动入站/单条重跑共用 `app.tasks.run_lead_pipeline`，并提供 `GET /api/v1/leads/pipeline-tasks/{task_id}` 查询状态
+  - **已归档**：`leads`/`audit_events` 表、Repository、CRUD/状态/审计/流水线 API、Celery 可靠队列 → `prd/backend-infrastructure.md`
+  - 状态枚举收敛到 PRD 完整生命周期（Received→Scored→Drafted→In Review→Sent/DNQ）
+  - 把 Graph 邮件 / 表单入站接入同一流水线（见 §2.1）
+  - OneSheet 字段对照 `业务规格.md §8`（Sheets 同步 = Phase 2 可选导出）
 - **1.4 调用日志规范落地**（CLAUDE.md 强制要求）
-  - 所有 LLM/Graph/队列调用需记录：入口、关键参数摘要、成功/失败、错误原因；**禁止输出 Key/Token/PII 原文**
-  - 现状：`geminiService.ts` 仅有 `console.error`，无入口/参数/成功日志
+  - **已归档**：后端 LLM/队列调用脱敏日志（入口/参数摘要/成功失败/错误原因，禁输出 Key/Token/PII）→ `prd/backend-infrastructure.md`
+  - 前端 research 路径迁移到后端后补齐脱敏调用日志（依赖 §1.1）
 - **1.5 密钥安全基线**：补建 `.gitignore`、`.env`（含 MS Graph + kimi 密钥）；确认 `.env` 已被 git 忽略 ✅（2026-06-02）
   - 删除 `.env.example`（部署到客户服务器，仓库不留模板）✅（2026-06-02）
   - `doc/技术方案与部署规划.md` 隐去 App Registration 真实值（App/Tenant/Secret ID + Client Secret 仅存 `.env`）✅（2026-06-02）
@@ -113,90 +105,84 @@
 - 邮件接入：**Microsoft Graph + OAuth2 Client Credentials Flow**（方案见 `doc/技术方案与部署规划.md §2`）
   - App Registration 已建（`Mail.Read` Application 级已授权），四个 Outlook 收件箱轮询打 `source_box` 标签
   - ⚠️ 阻塞：四个品牌收件箱**具体邮箱地址未提供**，需向客户索取后填入 `.env` 的 `MAILBOX_`*
-- 网页表单 webhook：接收 POST，自动填充 lead_id/日期/来源/邮箱/电话
-- 手动录入：前端提交已接后端持久化 ✅（2026-06-04）
-  - 2026-06-04，`POST /api/v1/leads/manual` 已写入 PostgreSQL；前端 `Manual Entry` 已先调用后端 API，再展示后端返回的 `lead_id`
-  - 2026-06-04，前端刷新后已优先加载 `GET /api/v1/leads` 的真实列表；后端不可用时回退显示 `MOCK_LEADS`
-  - 2026-06-04：Manual Entry 已改为全局两步弹窗；Step 1 仅粘贴自然语言，Step 2 确认核心字段并可展开修改完整提取字段；确认后自动进入详情并轮询任务结果
+- [x] 网页表单 webhook：接收 POST，自动填充 lead_id/日期/来源/邮箱/电话
+  - 2026-06-05：新增 `POST /api/v1/leads/webhook/form`，支持通用 JSON 表单字段映射（姓名/邮箱/电话/签证类型/message/UTM/活动代码），落库后写 `lead.received.form_webhook` 审计并投递现有 Celery triage pipeline；可选 `FORM_WEBHOOK_SECRET` + `X-Webhook-Secret` 保护入口。
+- 手动录入：[x] **已归档** → `prd/manual-entry.md`（两步引导式闭环：粘贴→提取→确认→落库→轮询；前端启动优先加载后端真实列表）
+- 原文保留与详情页对照：[x] 2026-06-05，`leads.raw_message` 已随 Lead API 返回为前端 `rawMessage`；详情页 `Leads Information` 底部新增默认收起的 Original Message 折叠块，支持字符数、展开滚动查看与复制。
 - 线索来源标记：自动识别 UTM/活动代码，保留 `lead_source`（XP349/RSA024 等）
-  - 现状：`Lead.source` 字段存在，但靠手填，无自动识别
+  - 2026-06-05：表单 webhook 已从 `lead_source` / `campaign_code` / `utm_campaign` / `utm_source` / 常见 `fields` 别名自动写入 `lead_source`。
+  - 待做：Graph 邮件入站、前端手动录入的来源代码仍需各自补自动识别。
 - WhatsApp 接入 — **Phase 2，不在本轮**
 
-### 2.2 AI 解析与提取（PRD §4.2）— 字段不全 + 模型错配
+### 2.2 AI 解析与提取（PRD §4.2）
 
-- 按 PRD §4.2 提取完整字段集：`sender_name, email_domain, lead_type, visa_category, job_title, nationality, net_worth_indicator, urgency_flag, multi_visa_flag, email_coherence, raw_message`
-  - 现状：`triageLead` 只提取 name/email/phone/visaType 等少数字段，缺 nationality/job_title/net_worth/coherence 等
-  - 进度：2026-06-04，后端 schema、数据库列和写回接口已覆盖该字段集；前端旧 `triageLead` 仍未迁移，真实 Gemini 回包因当前 Key 无效暂未验通
-- 用 Gemini Flash 做结构化提取，`temperature=0`，structured output / JSON Schema 保证 schema（进行中）
-  - 2026-06-04：新增后端 `POST /api/v1/extraction/email`，输入 `source_box/email_subject/email_from/email_body`，返回固定提取字段
-  - 2026-06-04：新增 `GeminiExtractionService`，REST 调用 Gemini `generateContent`，配置 `responseMimeType: application/json`、`responseJsonSchema`、`temperature=0.0`
-  - 2026-06-04：新增 `PUT /api/v1/leads/{lead_id}/extracted-fields`，可把提取结果写入 PostgreSQL 并生成审计
-  - 下步：本机/服务器网络可访问 Gemini 后跑通真实回包；随后把 Graph 邮件轮询和手动/表单入站接到该提取服务
-- **两步法拆分（Manual Entry）**：已完成“ShengSuanYun 提取 → 用户确认 → DNQ → Kimi 评分 → Kimi 起草”；确认字段直接进入 DNQ，后台禁止再次提取覆盖人工修改 ✅（2026-06-04）
+- **已归档**：完整提取字段集 schema + `/api/v1/extraction/email`/`/manual` + 提取字段写回 + `extraction_contract` 统一合同 → `prd/llm-contract-layer.md`
+- **已归档**：两步法拆分（提取→确认→DNQ→评分→模板或 LLM 起草，确认字段不被覆盖）→ `prd/manual-entry.md`
+- 更换有效 Key / 网络可达后跑通真实 LLM 提取回包
+- 把 Graph 邮件轮询接到该提取服务（依赖 §2.1 邮件接入）
+  - 2026-06-05：表单 webhook 已接入同一入站流水线并触发后续提取/评分/起草；Graph 邮件仍待客户提供四个品牌邮箱地址后接入。
 
-### 2.3 线索评分引擎（PRD §4.3）— 核心逻辑缺失 🔴
+### 2.3 线索评分引擎（PRD §4.3）🔴
 
-- **DNQ 6 条硬规则**：Python 函数前置判定（零 token），见 `业务规格.md §4.1` ✅（2026-06-04）
-  - 新增 `qualification_rules.py`；命中后确定性写入 `BD`、`dnq_reason`、`status=dnq`，跳过 Gemini 评分但继续生成拒绝审核草稿
-- **软规则 risk_flags**：PBS 薪资、Visitor 11(6) 关系等高风险标记，不自动拒绝（`业务规格.md §4.2`）✅（2026-06-04）
-  - 新增 `risk_flags` JSONB 字段与审计事件；软规则只标记，不进入 DNQ
-- 评分矩阵：未命中 DNQ → LLM 评分 → GD/MF/MD/BD（Phase 0 可先 GD vs Not-GD 二分类）
-  - 2026-06-04：新增后端 Gemini 评分服务 `POST /api/v1/leads/{lead_id}/score`，输出 `lead_score/score_confidence/score_rationale/escalation_flag/soft_dnq_warning`
-  - 2026-06-04：新增 `PUT /api/v1/leads/{lead_id}/score`，可把评分结果持久化到 PostgreSQL 并生成 `lead.score.persisted` 审计
-  - 2026-06-04：评分 API 与自动流水线均在 Gemini 前执行 DNQ；真实 fixture 验证返回 `provider=rules`、`BD / DNQ-01`
-  - 下步：更换有效 Gemini Key 后复测未命中 DNQ 的真实评分回包
-- 置信度标记驱动人工审核：低置信度时**标记待人工确认**，不自动执行
-  - 现状：有 `confidence` 字段和徽章，但**不影响任何流程门控**
-- 评分解释（白话理由）：已有 `reasons[]` 字段并在 UI 展示 ✅（保留）
-- **回归测试集验证 85% 一致率**（`业务规格.md §13.4`，上线前必跑的 gate）— 完全未建
+- **已归档**：DNQ 6 条硬规则 + 软规则 risk_flags + DNQ 命中确定性 BD 评分（含评分/写回 API）→ `prd/lead-scoring.md`
+- 评分矩阵：未命中 DNQ → 真实 LLM 评分 → GD/MF/MD/BD（依赖有效 Key 复测）
+- [x] 置信度标记驱动流程门控：低置信度**标记待人工确认**
+  - 2026-06-05：`score_confidence=low` 写回评分时状态进入 `in_review`；后续写入草稿不会覆盖该人工审核状态；容器内真实 API 冒烟通过。
+- [ ] **回归测试集验证 ≥85% 一致率**（`业务规格.md §13.4`，上线前必跑的 gate）
+  - [x] 2026-06-05：新增确定性回归 fixture（DNQ-01~06、RISK-01/02、unknown 不自动 DNQ、明显优质样例）与 `test_lead_regression_cases.py`；当前 Python 硬规则一致率 100%。
+  - [ ] 真实 LLM 评分矩阵一致率：仍依赖有效 Key / 网络可达后跑通，不在本轮强行打勾。
 
-### 2.4 回复起草（PRD §4.4）— 模板库与防捏造缺失
+### 2.4 回复起草（PRD §4.4）
 
-- Top 10 签证回复模板库（Phase 1）：按签证类型自动选模板填充
-  - 现状：草稿由 LLM 自由生成，**无模板库**（`业务规格.md §7` 有模板全集种子）
-- **费用金额硬编码自模板**（PRD §11 风险表：绝不由 LLM 生成，防捏造）🔴
-  - 现状：UI 里 Est. Revenue 是写死的 `R44,760`/`R12,500`，草稿费用靠 LLM
-- 品牌署名按 `source_box` 变化（Xpatweb / Retire In SA / Visa Litigation Services）
-- 分级差异化草稿：GD（预约邮件+语音话术+电话话术）/ MF·MD（完整报价）/ BD（简短或拒绝模板+替代签证建议）
-  - 现状：`triageLead` 统一产出 email/whatsapp/phone 三段，未按评分差异化
-  - 进度：2026-06-04，新增后端 Gemini 起草服务 `POST /api/v1/leads/{lead_id}/drafts` 与 `PUT /api/v1/leads/{lead_id}/drafts` 持久化接口；当前 prompt 已按评分/签证类型起草 email/WhatsApp/phone/internal post，但模板库与费用硬编码尚未完成
-- 输出 WhatsApp 发帖文案（Box–Quality–Action 格式，PRD §8.10）
+- **已归档**：Top 10 正向模板 + 6 条 DNQ 拒绝模板 + 费用硬编码（防捏造）+ 品牌署名 + 分级差异化草稿 + 内部 Box–Quality–Action 草稿 → `prd/reply-drafting.md`
+- 研究驱动 V2 草稿，与 V1 并排（依赖 §2.7）
+- MVP 系统内管理员审核门控（WhatsApp 点赞移 Phase 2，见 §10）
+- SMV 正式品牌署名待客户确认后更新映射
 
-### 2.5 路由与分配（PRD §4.5）— 全是前端假按钮 🔴
+### 2.5 路由与分配（PRD §4.5）— MVP 管理员审核路由已接，真实通知待接 🔴
 
 - 60 秒致电提醒：真实 Push / Slack DM 触发（PRD §8.9 最核心约束）
-  - 现状：仅 UI 红色卡片 + `tel:` 链接，**无真实通知推送**
+  - 进度：2026-06-05，pipeline 起草完成后会把需审核线索路由到 `admin` 并调用 `Notifier` 插座；当前仍是 `ConsoleNotifier`，**未接真实 Push / Slack DM**。
 - 升级路由：escalationFlag → 真实通知 Jerry，绕过标准队列
-  - 现状：有 `escalationFlag` 字段和图标，无通知动作
+  - MVP 口径：先统一通知 `admin` 做系统内审核；`escalation_handler` 专属通知保留为后续路由细化。
 - DNQ/Bad → Marisa 拒绝确认路径
-  - 现状：UI 有 "SEND TO MARISA" 按钮，**未接任何后端**
+  - 进度：2026-06-05，前端质量确认按钮已接 `/reject-confirm`，`quality_lead`/`admin` 可确认拒绝；MVP 通知先统一到 `admin`，真实通知仍是 ConsoleNotifier。
 - 签证核查 → 标记 Willem Pretorius（prompt 里提了，无真实路由）
+  - 进度：2026-06-05，后端路由已支持按签证核查文本标记查 `visa_verifier`；仍需把上游评分/提取结果稳定写入明确 marker。
 - Melissa 每日工作概览
 - 不同时区 GD：先 WhatsApp 语音再致电的标记逻辑
+- 📌 **路由接收人不写死人名** → 见 §2.9 用户/角色/权限设计方案（按角色查在职用户 + 接 Notifier 插座）
 
-### 2.6 四眼审核队列（PRD §4.6）— UI 在，逻辑全假 🔴
+### 2.6 四眼审核队列（PRD §4.6）— MVP 改为系统内管理员审核 🔴
 
 - 审核动作真实化：批准 / 编辑后批准 / 拒绝（退回修改）
-  - 现状：`Approve & Send`/`Edit Drafts`/`Archive` 只改本地 `status` 或空函数 `onClick={() => {}}`
+  - ✅ 2026-06-05：`Approve & Send` 接 `/approve`；`Edit Drafts` 接 `/edit-draft`；`Reject / Return Draft` 接 `/reject`；BD/DNQ 质量确认接 `/reject-confirm`。
 - 第二人复核门控：外发邮件须经第二人检查（当前无"人"的概念，无登录）
+  - ✅ 2026-06-05：后端 `approve` 已强制 `批准人 ≠ 最近一次提交/编辑草稿的人`；同人批准返回 409。
+  - ✅ 2026-06-05（口径调整）：MVP 最终外发批准权限收紧为 `admin`；`lead_agent`/`team_lead` 可编辑或退回，但不能最终 Approve & Send。
 - **完整审计记录**：谁在何时批准（持久化）
   - 2026-06-04：后端新增 `GET /api/v1/leads/{lead_id}/audit-events`，可读取持久化 `audit_events`
   - 2026-06-04：前端详情页 `ACTIVITY AUDIT` 已替换为真实审计时间线；接口失败时显示降级提示
-  - 下步：接入登录/操作者身份后，将 `actor` 从 `frontend`/`system` 升级为真实复核人，并覆盖“谁批准”
-- WhatsApp 发帖获赞前不可外发的人工门控（PRD §8.10）
+  - ✅ 2026-06-05：审核动作 actor 改用 `current_user.user_id`，不再信任前端传 actor；验收覆盖 `lead.drafts.edited` / `lead.review.rejected` / `lead.reject.confirmed` / `lead.approved`。
+- MVP 人工门控：管理员收到通知并在系统内审核通过
+  - ✅ 2026-06-05：`routing.py` 将起草完成后的待审核线索路由到 `admin`；`approve` 需要 `lead.approve`，当前仅 `admin` 具备。
+  - Phase 2：WhatsApp 发帖获赞门控后移，待客户确认仍要用 WhatsApp 作为内部审批渠道后再接。
+- 📌 **审核动作真实化依赖登录/用户身份** → 见 §2.9 用户/角色/权限设计方案（四眼第二人校验 + 真实 actor 审计）
 
-### 2.7 客户背景调研（PRD §4.7）— 同步阻塞 + 无真实来源
+### 2.7 客户背景调研（PRD §4.7）— 后端异步骨架已接，真实 Web Search 待接
 
 - **异步执行**：评分后后台触发，绝不阻塞 60 秒致电（PRD §8.13）
-  - 现状：`handleResearch` 是用户**手动点按钮同步等待**，不是自动异步
+  - [x] 2026-06-05：新增 `research_briefs` 表、`POST /api/v1/leads/{lead_id}/research`、`GET /api/v1/leads/{lead_id}/research` 与 Celery `run_lead_research`；前端 Research 按钮改为后端排队 + 状态轮询，不再直接调用浏览器端 Gemini。
 - 真实调研来源：Phase 1 仅 Web Search（LinkedIn 移 Phase 2）
-  - 现状：`generateResearchBrief` 让 LLM 凭空"编"背景，**无任何真实检索**
+  - 进度：2026-06-05，已移除前端 `@google/genai` 调研依赖；未配置 `WEB_SEARCH_PROVIDER`/`WEB_SEARCH_API_KEY` 时后端明确返回 `failed/WebSearchNotConfigured`，不会编造背景。
+  - [ ] 待接真实 Web Search provider（Tavily / SerpAPI / Google CSE 等任选其一），并把来源 URL 写入 `source_refs` 后再交给 LLM 总结。
 - 输出 1 Research Brief：已有 5 段结构 ✅（personalProfile/employer/immigration/news/consultantTips）
 - 输出 2 Consultant Briefing Note（最多 3 条）— 字段未独立建模
 - 输出 3 研究驱动草稿 V2，与 V1 并排（PRD §8.14）
   - 现状：UI 有 V1/V2 切换钮，但**两个 tab 显示同一份草稿**，V2 是空壳
 - 外发邮件不提及做过调研（PRD §8.15）— 需写入 prompt 约束
 - 调研进行中 loading 态显示在致电提醒旁（PRD §8.13）
+  - 2026-06-05：详情页 Research tab 已显示后端排队/轮询 loading；真正自动评分后触发仍待接入 pipeline。
 
 ### 2.8 CRM 记录（PRD §4.8）— 未实现
 
@@ -205,6 +191,60 @@
   - 现状：`LeadStatus` 枚举存在，但状态流转无持久化、无完整生命周期
 - OneSheet 双向同步（`业务规格.md §8`）
 - `enquiry_lead_quality`(AI) 与 `current_quality`(人工) 双字段（PRD §8.12）— 未建模
+
+---
+
+### 2.9 用户 / 角色 / 权限 + 管理员用户管理
+
+- [x] **已归档** → 见 `prd/user-management.md`（2026-06-06）
+  - 已实现：JWT 登录、`AUTH_ENABLED` 灰度、`users`/`user_roles`、5 角色权限常量、审核动作权限、四眼校验、路由并入 `Users` 表编辑弹窗、真实 actor 审计、管理员 `Users` 页面（新增用户/单角色分配/启停/重置密码/按用户配置路由 category）、`user_audit_events`。
+  - 最新角色：`superadmin` / `approver` / `agent` / `quality_lead` / `reviewer`；一人一角色，`admin` 历史角色启动时幂等迁移为 `superadmin`。
+  - 验证：容器后端单测 62/62 ✅；目标角色/路由测试 23/23 ✅；`npm run lint` ✅；`npm run build` ✅；`GET /api/v1/users/roles`、`GET /api/v1/users`、`GET /api/v1/routing/rules`、按用户设置签证路由冒烟 ✅。
+- [ ] 权限矩阵自助编辑
+  - 延后：MVP 继续把 `ROLE_PERMISSIONS` 放后端代码常量，降低误配风险；待客户明确需要业务人员自行调整权限后，再升级为数据库表 + 配置 UI。
+  - 已拆分完成：「路由收件人配置」已在 §2.11 完成并归档到 `prd/user-management.md`，不再与「权限矩阵自助编辑」捆绑。
+
+### 2.10 角色精简（6→4）+ 路由收件人单独配置（方案 A）
+
+> 📋 设计规划：`doc/角色精简与路由配置-开发规划.md`（2026-06-05）
+> 背景：现有 6 角色权限只有 4 套（lead_agent≡team_lead、escalation_handler≡visa_verifier 权限重复）；角色身兼「权限+路由信箱」两职是 UX 复杂的根因。目标：角色回归纯权限收敛到 4 个，路由收件人解耦到 `routing_rules` 配置表。
+> 最新状态：该方案已被 `doc/角色5分与路由并入用户表-开发规划.md` 取代；最终实现见 §2.11 和 `prd/user-management.md`。
+
+- [x] **已归档** → 见 `prd/user-management.md`（2026-06-05）
+  - 已实现：后端角色收敛为 `admin`/`agent`/`quality_lead`/`reviewer`；`user_roles` 幂等迁移；`routing_rules(category,user_id)`；路由引擎按 category 查收件人并空配置兜底 active admin；`GET/PUT /api/v1/routing/rules`；前端 `Routing` 配置页；Users 页角色 chip 收敛；`types.ts`/`constants.ts` 旧人名 mock 清理。
+  - 验证：容器后端 `python -m unittest discover /app/tests` 55/55 ✅；目标测试 `test_auth_service`/`test_users_api`/`test_routing_service`/`test_routing_rules_api`/`test_database_migrations` 16/16 ✅；`npm run lint` ✅；`npm run build` ✅；重建 app/worker 后 `GET /api/v1/users/roles` 返回 4 角色，`GET /api/v1/routing/rules` 返回 4 category 且 fallback_to_admin=true。
+
+### 2.11 角色按职责重切（4→5）+ 路由并入用户表
+
+> 📋 最新规划：`doc/角色5分与路由并入用户表-开发规划.md`（2026-06-06）
+> 背景：4 角色方案把最终审批权限仍压在 `admin` 上，且独立 `Routing` 页面让管理员需要在 Users 与 Routing 间来回切换。最新方案把角色按职责拆成 5 个，并把路由 category 作为用户属性在 Users 编辑弹窗中维护。
+
+- [x] **已归档** → 见 `prd/user-management.md`（2026-06-06）
+  - 已实现：角色调整为 `superadmin` / `approver` / `agent` / `quality_lead` / `reviewer`；`superadmin` 拥有全部 7 项权限，`approver` 负责最终批准，`agent` 负责看线索/改草稿/退回，`quality_lead` 负责 DNQ/Bad 拒绝确认，`reviewer` 只读。
+  - 已实现：`user_roles` 改为业务上一人一角色；新增/更新用户接口强制 exactly one role；前端用户创建与编辑均用单选 role radio。
+  - 已实现：启动迁移把历史 `admin` 幂等改为 `superadmin`；空路由兜底也从 active admin 改为 active superadmin。
+  - 已实现：路由配置并入 Users 表；`ManagedUser.routing_categories` 随用户列表返回；新增 `PUT /api/v1/users/{user_id}/routing-categories` 按用户保存 category；Users 表展示路由 tags，编辑弹窗按 category 勾选。
+  - 已实现：删除前端独立 `Routing` 入口；`GET /api/v1/routing/rules` 保留只读总览；旧 `PUT /api/v1/routing/rules/{category}` 已废弃并返回 410，提示改用按用户配置 API。
+  - 验证：目标后端测试 23/23 ✅；完整后端测试 62/62 ✅；`npm run lint` ✅；`npm run build` ✅；本地 API 冒烟确认 5 角色、用户列表包含 `routing_categories`、空配置兜底 `fallback_to_superadmin=true`、Willem 签证路由可通过 Users 路由接口设置并反映到只读路由总览。
+  - 仍未完成：权限矩阵自助编辑继续延后；真实 Slack / Push / Email 通知通道仍未接入，当前仍使用 `ConsoleNotifier` 插座。
+
+### 2.12 线索详情抽屉化 + 就地编辑（详见 `docs/lead-detail-drawer-plan.md`）
+
+- [x] 阶段一：抽屉骨架（F1–F7）
+  - 完成：2026-06-06，修复 `LeadDetailDrawer` 半成品导致的类型检查失败；详情不再替换 Dashboard / Review Queue 列表，而是以右侧宽抽屉叠加打开；抽屉包含 Overview / Research Brief / Activity Audit 三个 Tab，Overview 顺序为 60 秒呼叫提示 → 基础信息/AI 评分/原文 → 沟通草稿；底部 Actions 吸底，固定为 3 个按钮：Approve & Send / Return / Archive；Header 与 Esc 可关闭抽屉。
+  - 验证：`npm run lint` ✅；`npm run build` ✅；`curl -I http://localhost:3001/` ✅。当前会话未暴露 Browser 控制工具，本轮未做截图级视觉验收。
+- [x] 阶段二：就地编辑 + 审计（B1–B4 / F8–F12）
+  - [x] B1/B2/F8/F9 基础字段编辑链路：新增 `PATCH /api/v1/leads/{lead_id}/fields`，复用 `lead.draft.edit` 权限；仓储层逐字段 diff，仅真实变化时写 `lead.fields.edited` 审计；前端 `editLeadFields` 已接入，基础信息姓名/邮箱/电话/签证/来源/负责人/品牌已出现就地编辑入口。
+  - [x] 负责人字段持久化：新增 `leads.assigned_consultant` schema/迁移字段，并映射到前端 `assignedConsultant`，避免刷新后丢失。
+  - [x] F10 草稿区独立就地编辑：Email / Phone / WhatsApp 三块各自有 Edit / Save / Cancel，保存时只提交对应草稿字段，继续复用现有 `/edit-draft`。
+  - [x] B3 前端审计文案：补 `lead.fields.edited`、`lead.drafts.edited`、批准、退回、DNQ 确认的人话文案与图标；字段编辑只显示字段名，不显示隐私原文。
+  - [x] F12 草稿“已修改”标记：单块草稿保存后显示 Modified 标记，提示审批人当前发送内容已被人工改过。
+  - [x] B4 权限矩阵级后端测试：补 HTTP 级 `/fields` 权限测试，覆盖 reviewer / approver / quality_lead 返回 403，agent / superadmin 可通过；补仓储层 no-change 测试，确认未变化字段不写审计。
+  - 验证：`npm run lint` ✅；`npm run build` ✅；`python3 -m py_compile backend/app/api/leads.py backend/app/repositories/leads.py backend/app/schemas.py backend/app/database.py backend/tests/test_lead_review_api.py` ✅；挂载当前 `backend/` 到后端镜像执行 `python -m unittest tests.test_lead_review_api` 7/7 ✅。
+- [x] 阶段三：联调验收（V1–V4）
+  - 完成：2026-06-06，使用 Playwright 在认证模式后端下覆盖 superadmin / agent / approver / quality_lead / reviewer 角色；验证抽屉打开、抽屉打开时切换线索、底部 3 按钮顺序、agent 可编辑且不可批准、reviewer/approver/quality_lead 只读且 pipeline failed / 无草稿时批准禁用。
+  - 验证：`npm run lint` ✅；`npm run build` ✅；`test-results/lead-detail-drawer/verify.mjs` ✅，报告 `test-results/lead-detail-drawer/report.json`，截图 `superadmin-drawer-open.png` / `superadmin-drawer-switched.png` / `agent-editable.png` / `reviewer-readonly.png` / `approver-readonly.png` / `quality_lead-readonly.png`。
+- 决策已定：不扩权限（沿用 `lead.draft.edit`）/ 可改字段=姓名·邮箱·电话·签证·来源·负责人·品牌 / 禁用规则见 `docs/lead-detail-drawer-plan.md` D-Q3。
 
 ---
 
@@ -223,6 +263,7 @@
 
 - LinkedIn 调研（Proxycurl/Apollo 付费 API，先做 1 周 POC）
 - WhatsApp 接入（Wati/Twilio，ML393；来源默认评分降一档，`业务规格.md §13.2`）
+- WhatsApp 发帖获赞门控（如客户确认继续用 WhatsApp 群作为内部审批渠道，再替代/补充 MVP 系统内 admin 审核）
 - 自动跟进计划（Tracker 写跟进日期 + 触发跟进邮件）
 - 每周五线索报告自动发 Rebecca
 - 数据分析仪表盘（当前 Analytics 页为假数据，需接真实统计）
@@ -231,6 +272,7 @@
 - 完整 CRM 集成（HubSpot/Salesforce 迁移）
 - 训练反馈闭环（顾问标记评分对错 → 改进 prompt）
 - 15 天质检独立工作流（案例管理，PRD §8.7，明确不混入线索分级）
+- 前端 `researchService.ts` 的 `generateResearchBrief` 迁移到后端异步 Web Search / LLM adapter；当前仅完成前端服务文件通用命名，尚未迁移 research 执行位置。
 
 ---
 
@@ -244,7 +286,10 @@
 - 谁拥有服务器 root/管理员权限来部署运行容器
 - 公网入口：域名或静态 IP（Microsoft Graph 接收实时邮件 webhook 必需；开发期用轮询/ngrok 兜底）
 - 上线后系统的日常运维归属人 + 客户团队偏好技术栈（影响长期可维护性）
-- 评分阈值/模板/路由规则：客户团队是否需**自助可编辑**（要做配置界面）还是写死配置（找我们改）
+- 评分阈值/模板/路由规则：客户团队是否需**自助可编辑**（要做配置界面）还是写死配置（找我们改）；用户管理 UI 已按 MVP 最小范围完成，权限矩阵自助配置仍延后。
+- 团队成员真实邮箱（用于替换当前 seed / 历史占位账号）
+- 一个人是否可兼多角色：最新实现已按业务职责收敛为一人一角色；如客户后续确认需要兼岗，需要再调整用户角色模型与前端编辑交互。
+- 管理员审核提醒通知 channel（Email / Slack / Push 三选一或组合）；当前 MVP 先用 ConsoleNotifier 记录日志，客户确认后替换真实通知实现
 
 **B. 数据字段与归属（本轮新增）**
 
@@ -264,132 +309,173 @@
 
 ## 开发进度
 
-### 2026-06-01
+> 2026-06-01 ~ 06-05 的功能实现轮次（后端骨架、PostgreSQL 持久化、Celery 队列、DNQ 规则、模板库、LLM 合同解耦、Manual Entry 两步闭环）已卸货到 `prd/`，详见各模块文档与「TODO 卸货记录」。以下仅保留摘要 + 最近活跃轮次。
 
-- 本轮：完成 PRD ↔ 代码库差距分析，建立 TODO.md
-- 结论：当前为**纯前端原型**，UI 层基本成型；后端、AI 流水线核心逻辑、数据接入、路由通知、持久化全部待建
+### 2026-06-01 ~ 06-05（已归档功能轮次摘要）
 
-### 2026-06-02
+- 技术栈定稿（`doc/技术方案与部署规划.md`）：Docker Compose（FastAPI+Celery/PostgreSQL/Redis）→ 客户服务器；邮件 Microsoft Graph（App Registration 已建并授权 `Mail.Read`）。
+- 已交付并验证（详见 `prd/`）：后端基础设施、DNQ 评分规则、回复模板库、LLM 合同解耦、Manual Entry 两步闭环。后端容器单测累计 30/30 ✅。
+- 职责边界决策：LLM 提取事实 → 数据校验识别缺失/冲突 → Python 执行硬规则 → 不确定项转人工；`null/unknown`/矛盾/证据不足时不得自动 DNQ。
+- 仍开放的横切阻塞：① 有效 LLM Key / 网络可达后复测真实提取→评分→起草；② Graph 邮件入站；③ 登录/用户身份（见 §2.9）。
+- ⚠️ 安全待办：Client Secret 曾明文出现，建议 Azure 轮换（§1.5）。
 
-- 本轮：技术栈决策定稿，产出 `doc/技术方案与部署规划.md`
-  - 部署：Docker Compose（FastAPI+Celery / PostgreSQL / Redis）→ 客户服务器
-  - LLM：kimi-k2.5（提取）+ kimi-k2.6（评分/起草），Anthropic 协议
-  - 邮件：Microsoft Graph，App Registration 已建并授权 `Mail.Read`
-- 安全基线：补建 `.gitignore` + `.env`（含 MS Graph 密钥）+ `.env.example`，已验证 `.env` 被 git 忽略（§1.5 ✅）
-- 最高优先级（建议下轮）：§1.2 FastAPI+Docker 骨架 → §1.1 kimi 迁移 → §2.3 DNQ 硬规则与评分引擎
-- 待客户：四个品牌收件箱邮箱地址（阻塞 §2.1 邮件接入联调）
+### 2026-06-05（设计：用户/角色/权限体系）
 
-### 2026-06-02（补充：安全收口 + 客户对齐）
+- 本轮：与用户讨论确认「把写死人名的路由抽象为 用户+角色+权限 三层」方向；产出完整设计方案并写入 §2.9（未实现，仅设计）。
+- 决策：角色管「收到哪类线索」、权限管「能做什么动作」；按 PRD §3 + 业务规格 §5 现有口径定义 6 个角色 + 7 项权限；认证用自建轻量 JWT；四眼原则强制「批准人 ≠ 起草人」；带 `AUTH_ENABLED` 灰度开关守住现有 demo。
+- 未改任何业务代码；§2.5 / §2.6 已加指针指向 §2.9；待客户确认项补充团队邮箱、自助管理 UI、多角色三项。
+- 下步（待用户拍板）：可从 §2.9 阶段一后端（users/user_roles 表 + JWT 登录 + 审核动作接口 + 四眼校验 + 路由引擎）起步。
 
-- 安全收口：删除 `.env.example`；规划文档隐去 App Registration 真实值；`.gitignore` 追加忽略 `.claude/`/`CLAUDE.md`/`API文档/`，已验证四项均被 git 忽略（§1.5）
-- 本地 Docker 结论：开发期本地 `docker compose` 可跑通后端；但实时邮件 webhook 需公网入口，生产必须部署到客户服务器（开发期用轮询/ngrok 兜底）
-- 客户对齐：草拟给 Brandon 的英文邮件，覆盖「部署环境 / 运维归属 / 字段维护 / 邮箱地址 / CRM 去向」，新增待确认项见上「待客户确认 A/B」段（邮件待发送）
-- ⚠️ 安全待办：Client Secret 已明文出现于协作过程，建议 Azure 重新生成轮换（见 §1.5）
-- 推进策略定稿（§1.6）：待确认项不阻塞核心开发，采用「接口隔离+假实现」推进约 80%；配置 UI 与真·端到端联调暂缓至客户答复
-- 下轮目标：§1.2 FastAPI+Docker 骨架，并从一开始预留邮件/通知/CRM 三个「插座」接口
+### 2026-06-05（开发：§2.9 阶段一后端）
 
-### 2026-06-04
+- 本轮：完成 §2.9 阶段一后端基础，包括 `users`/`user_roles` 表、用户仓库、角色权限常量、登录 `/api/v1/auth/login`、当前用户 `/api/v1/auth/me`、`AUTH_ENABLED` 灰度兜底、默认占位账号 seed。
+- 审核动作：新增 `POST /api/v1/leads/{id}/approve`、`/reject`、`/reject-confirm`、`/edit-draft`；状态变更与审计 actor 改用 `current_user.user_id`；批准动作已加后端四眼校验。
+- 路由：新增 `routing.py`，pipeline 起草完成后按 `escalation_flag` / `dnq_reason` / 签证核查标记 / 常规评分查角色接收人，并调用现有 `Notifier` 插座；人名只存在 seed 用户数据，不写进业务判断。
+- 验证：容器内 `python -m unittest discover /app/tests` 36/36 ✅；`GET /healthz` ✅；`GET /api/v1/auth/me`（AUTH_ENABLED=false dev admin）✅；`POST /api/v1/auth/login`（admin@example.com / seed 密码）✅。
+- 当时未完成：前端 `LoginView` / `AuthContext` / `authApi` / token 注入 / 401 跳登录尚未接；详情页审核按钮仍未接新增后端接口。
+- 后续状态：已在下一条「§2.9 阶段一前端」完成。
 
-- 本轮：按用户要求更新 LLM 环境变量接口，`.env` 新增 `LLM_`*、`KIMI_*`、`GEMINI_*` 配置；后端 `Settings` 支持读取 Kimi/Gemini Key 与模型配置；前端 Gemini 服务改为通过环境变量读取 triage/research 模型名。
-- 验证：已做配置文件与代码静态检查；未调用外部 LLM，因为 Key 由用户稍后手动填写。
-- 下轮建议：继续 §1.1，在 FastAPI 后端新增 Kimi Anthropic 协议 service 层，并把前端手动录入从浏览器 Gemini 调用迁到后端接口。
+### 2026-06-05（开发：§2.9 阶段一前端）
 
-### 2026-06-04
+- 本轮：完成前端登录与权限上下文，新增 `authApi`、`AuthContext`、`LoginView`；所有 `leadApi` 请求统一走 `authFetch` 注入 token，401 时清 token 并回登录。
+- 审核接线：详情页 `Approve & Send Drafts` 接 `/approve`，`Edit Drafts` 进入草稿编辑态并保存到 `/edit-draft`，`Reject / Return Draft` 接 `/reject`，BD/DNQ 的质量确认按钮接 `/reject-confirm`；按钮按 `can(permission)` 显隐。
+- 验证：`npm run lint` ✅；`npm run build` ✅；`GET http://localhost:3000` ✅；`GET /api/v1/auth/me` ✅；`GET /api/v1/leads?limit=1` ✅。
+- 限制：该轮仅完成登录与审核接线；后续 2026-06-05 已完成用户管理 UI，路由/权限矩阵配置 UI 仍延后；当前 Browser 控制工具未暴露，未做交互截图验证。
+- 下轮建议：可继续 §2.5 真实通知 channel，或进入 §2.7 后端异步调研。
 
-- 本轮：统一 PRD 引用为 `doc/prd.md`；新增 FastAPI 后端骨架、Docker Compose（app/postgres/redis）、健康检查、手动线索接收 API、通知/CRM 占位接口与脱敏调用日志。
-- 验证：`npm run lint` ✅；`python3 -m py_compile backend/app/*.py backend/app/api/*.py backend/app/services/*.py` ✅；`docker compose config --quiet` ✅；旧路径 `doc/产品需求文档.md` 引用扫描无残留 ✅。
-- 仍未完成：§1.2 还未真正接数据库/队列执行；§1.1 kimi 迁移、§1.3 Lead 表和状态机仍待做。
-- 下轮建议：继续 §1.3，建立 PostgreSQL 表结构/Repository，再把 `/api/v1/leads/manual` 从“接收占位”升级为“落库 + 写审计 + 触发评分队列”。
+### 2026-06-05（验收：§2.5 / §2.6 / §2.9 工作流）
 
-### 2026-06-04（补充：PostgreSQL 持久化）
+- 本轮：用容器内真实 API 创建临时 E2E 测试线索，验证审核与四眼链路；宿主 `curl`/Node fetch 当前无法连 8000，改用 `docker exec xpatweb-ai-lead-triage-system-app-1` 在容器内访问 `127.0.0.1:8000`。
+- 通过项：`/auth/login` 200；`/edit-draft` 后状态 `in_review`；同一 actor 直接 `/approve` 返回 409；`/reject` 后状态 `drafted`；`/reject-confirm` 后状态 `dnq`；另一条未编辑线索 `/approve` 后状态 `sent`。
+- 审计验证：测试线索包含 `lead.drafts.edited`、`lead.review.rejected`、`lead.reject.confirmed`；直接批准线索包含 `lead.approved`。
+- TODO 回写：§2.5 / §2.6 的“全是假”描述已更新为当前事实：后端角色路由和审核动作已真实化；真实 Slack/Push 通知仍未做。
+- 后续口径调整：2026-06-05，MVP 改为系统内 admin 审核通过，不再做 WhatsApp 获赞门控；WhatsApp 门控移入 §10 Phase 2。
+- 下轮建议：接 §2.5 真实通知 channel，或进入 §2.7 后端异步调研。
 
-- 本轮：完成 §1.3 的第一段落地，新增数据库连接池、启动建表 SQL、`LeadRepository`、`leads` / `audit_events` 表；手动线索 API 已真实落库并写审计。
-- 验证：`python3 -m py_compile backend/app/*.py backend/app/api/*.py backend/app/repositories/*.py backend/app/services/*.py` ✅；`docker compose config --quiet` ✅；`npm run lint` ✅。
-- 未完成/阻塞：`docker compose up -d postgres redis` 未能运行，因为本机 Docker daemon 未启动（报错：无法连接 `/Users/wangmeifeng/.docker/run/docker.sock`）；待打开 Docker Desktop 后可做真实容器联调。
-- 下轮建议：打开 Docker 后跑通真实 API 写库；随后做前端手动录入接后端，或继续实现 Celery 评分队列触发点。
+### 2026-06-05（口径调整：MVP 管理员审核替代 WhatsApp 点赞）
 
-### 2026-06-04（补充：Docker 联调 + 前端接后端）
+- 本轮：按用户确认，将 MVP 人工门控从“WhatsApp 群发帖获赞”改成“系统内 admin 收到通知并审核通过”；WhatsApp 点赞门控后移到 §10 Phase 2。
+- 代码：`lead.approve` 权限收紧为仅 `admin`；`lead_agent`/`team_lead` 保留查看、编辑草稿、退回权限；`routing.py` 将起草后的待审核线索统一路由到 `admin`。
+- 验证：容器后端单测 `python -m unittest discover /app/tests` 39/39 ✅；`npm run lint` ✅；容器内登录冒烟确认 `admin` 有 `lead.approve`、`melissa@example.com` 无 `lead.approve` ✅。
+- 下轮建议：真实通知 channel 先放入待客户确认；客户确认后再把 `admin` 审核提醒从 ConsoleNotifier 替换为 Slack / Push / Email 通道。
 
-- 本轮：按用户要求停止占用 `8000` 的旧容器 `enterprise-mock-api`；本项目 app 恢复映射 `8000:8000`；前端默认 API 地址恢复为 `http://localhost:8000`。
-- 前端：新增 `src/services/leadApi.ts`，`Manual Entry` 提交现在先写入后端 PostgreSQL，再用后端返回的 `lead_id` 建立前端列表项；调用日志只记录邮箱域名、来源箱、签证类别和输入长度。
-- 验证：`curl http://localhost:8000/healthz` ✅；`POST /api/v1/leads/manual` ✅；`GET /api/v1/leads/{lead_id}` ✅；数据库查询 `leads=2`、`audit_events=2` ✅；`npm run lint` ✅；Python 编译检查 ✅。
-- 仍未完成：前端 Dashboard 初始数据还来自 `MOCK_LEADS`；刷新页面后不会从后端重新加载数据库线索。下轮建议新增 `GET /api/v1/leads` 列表接口并让前端启动时拉取。
+### 2026-06-05（开发：管理员用户管理最小闭环）
 
-### 2026-06-04（补充：线索列表接口）
+- 本轮：按用户确认，实现最小管理员用户管理范围；新增后端 `/api/v1/users` 管理 API、`user_audit_events`、最后一个 active admin 保护，前端新增 `Users` 页面（新增用户、改角色、启停、重置密码）。
+- 安全与日志：用户管理 API 和前端调用均记录入口/成功/失败摘要；只记录邮箱域名、角色数量、状态、密码长度，不输出 token、密码或隐私原文。
+- 验证：`npm run lint` ✅；`npm run build` ✅；重建 app 容器后后端单测 `python -m unittest discover /app/tests` 46/46 ✅；容器内 `GET /api/v1/users` 冒烟 ✅。
+- 文档：已将 §2.9 已完成内容归档到 `prd/user-management.md`，TODO 仅保留“自助配置路由规则 / 权限矩阵”后续项。
+- 限制：本轮未做 in-app 浏览器截图验证（当前会话未暴露 Browser 控制工具）；Vite dev server 已在 `http://localhost:3000` 运行。
 
-- 本轮：新增后端 `GET /api/v1/leads?limit=...` 列表接口；前端 `App` 启动时调用 `listLeads()`，把数据库记录映射为当前 UI 的 `Lead` 结构，后端不可用时显示黄色提示并保留 mock 数据。
-- 验证：`curl 'http://localhost:8000/api/v1/leads?limit=10'` ✅，返回 2 条 PostgreSQL 线索；后端日志记录 `[api/leads/list] enter/success` 且只输出数量与 limit；`npm run lint` ✅；Python 编译检查 ✅；`docker compose ps` 显示 app/postgres/redis 正常运行。
-- 下轮建议：实现 `PATCH /api/v1/leads/{lead_id}/status`，把前端 Approve/Archive/Review 状态按钮接到后端，并写入 `audit_events`。
+### 2026-06-05（开发：§2.3 回归测试集 + 低置信度门控）
 
-### 2026-06-04（补充：状态更新与审计）
+- 本轮：补上 §2.3 的确定性回归测试集，覆盖 6 条 DNQ 硬规则、2 条软风险、不确定字段不自动 DNQ、明显优质样例；修正样例边界，DNQ-04 只验证硬拒绝，RISK-02 由独立弱证据样例覆盖。
+- 代码：`persist_score` 新增低置信度门控，`score_confidence=low` 时把状态置为 `in_review`；`persist_drafts` 保持原有状态保护，草稿写入不会把低置信度线索推进到 `drafted`。
+- 验证：容器后端单测 `python -m unittest discover /app/tests` 46/46 ✅；`npm run lint` ✅；容器内真实 API 冒烟确认低置信度评分后状态 `in_review`、写草稿后仍为 `in_review`、审计含 `lead.score.persisted` 与 `lead.drafts.persisted` ✅。
+- 未完成：真实 LLM 评分矩阵 ≥85% 一致率仍依赖有效 Key / 网络可达后执行；当前只完成 Python 硬规则与流程门控的回归 gate。
 
-- 本轮：新增后端 `PATCH /api/v1/leads/{lead_id}/status`；`LeadRepository.update_status()` 在同一事务内更新 `leads.status/updated_at` 并写入 `audit_events` 的 `lead.status_changed`。
-- 前端：`updateLeadStatus` 已改为调用后端状态 API，成功后用后端返回记录刷新当前列表；失败时回滚前端状态并显示提示。当前支持 UI 操作态 `contacted/in_review/sent/dnq/archived` 映射。
-- 验证：`PATCH /api/v1/leads/lead-a72c81a8-f967-44ae-b477-ec17b5ef86ca/status` ✅；数据库确认该线索 `status=in_review` ✅；`audit_events` 出现 `lead.status_changed`，metadata 记录 `previous_status=received`、`new_status=in_review` ✅；`GET /api/v1/leads?limit=10` 返回最新状态 ✅；`npm run lint` ✅；Python 编译检查 ✅。
-- 下轮建议：新增 `GET /api/v1/leads/{lead_id}/audit-events`，把详情页右侧写死审计时间线替换成真实审计记录。
+---
 
-### 2026-06-04（补充：真实审计时间线）
+### 2026-06-05（设计：角色精简 6→4 + 路由收件人单独配置）
 
-- 本轮：新增后端 `GET /api/v1/leads/{lead_id}/audit-events`，读取持久化审计事件；前端 `LeadDetailView` 进入详情时加载真实审计，替换原 `09:23/09:24` 硬编码假数据。
-- 日志：后端新增 `[api/leads/audit] enter/success/not_found`；前端新增 `[client/leads/audit] enter/success/fail` 与详情页加载失败日志，只记录 `leadId`、数量、HTTP 状态、耗时，不输出邮箱、原文或密钥。
-- 验证：`python3 -m py_compile backend/app/*.py backend/app/api/*.py backend/app/repositories/*.py backend/app/services/*.py` ✅；`npm run lint` ✅；`docker compose up -d --build app` ✅；`curl /healthz` ✅；`curl /api/v1/leads/lead-a72c81a8-f967-44ae-b477-ec17b5ef86ca/audit-events` ✅，返回手动入站与状态变更 2 条审计。
-- 仍未完成：§2.6 的“谁批准”需要登录/用户身份后才能闭环；当前 actor 仍是 `system`、`frontend` 或验证脚本传入值。
-- 下轮建议：继续 §1.1 Kimi 后端 service 层，或继续 §2.6 做审核动作真实化与操作者身份。
+- 本轮：与用户确认方向——角色从 6 个收敛到 4 个（纯权限），路由收件人用方案 A 解耦到独立配置表；产出完整开发规划 `doc/角色精简与路由配置-开发规划.md`（**仅设计，未动代码**）。
+- 决策：① 角色合并 lead_agent+team_lead→`agent`、escalation_handler+visa_verifier→`reviewer`；② 新增 `routing_rules(category,user_id)` 表，按 4 类 category（escalation/dnq_reject/visa_verification/standard_review）配收件人；③ 空配置兜底全 admin，保证零回归；④ user_roles 用幂等 SQL 迁移避免多角色用户主键冲突。
+- TODO 回写：新增 §2.10 四阶段任务；原 §2.9「自助配置路由规则/权限矩阵」拆分，路由收件人独立为 §2.10，权限矩阵自助编辑仍延后。
+- 下步（待用户拍板开工）：从 §2.10 阶段一后端角色收敛起步。
 
-### 2026-06-04（补充：Gemini Flash 结构化提取）
+### 2026-06-05（开发：详情页 Original Message）
 
-- 本轮：按用户要求将结构化邮件字段提取定为 Gemini Flash + `temperature=0`；新增后端 `POST /api/v1/extraction/email`、`GeminiExtractionService`、`EmailExtractionRequest/Response` schema，并把 CORS 补到本地前端 `3001`。
-- 文档：同步更新 `doc/prd.md`、`doc/业务规格.md`、`README.md` 与本 TODO，替换原“Haiku/Kimi 提取”口径为“Gemini 后端服务层”。
-- 日志：新增 `[api/extraction/email]` 与 `[llm/gemini/extract]` 入口/成功/失败日志，只记录品牌、模型、temperature、输入长度、耗时和字段摘要，不输出邮件正文、API Key 或 Token。
-- 验证：Python 编译 ✅；`npm run lint` ✅；`docker compose up -d --build app` ✅；`curl /healthz` ✅。真实 Gemini 样例请求已进入后端，但当前本机/容器访问 `generativelanguage.googleapis.com` 超时，返回 502；需网络连通后复测真实回包。
+- 本轮：补齐原文正文链路；后端 `LeadRead` 透出 `raw_message`，前端 `BackendLead`/`Lead` 映射为 `rawMessage`，mock 数据补充原文样例。
+- UI：`Leads Information` tab 字段下方新增跨整行 Original Message 折叠块；默认收起，显示字符数；展开后用等宽文本、`max-height` 与内部滚动查看；Copy 只写剪贴板，不在日志输出正文。
+- 验证：`npm run lint` ✅；容器内 `python -m unittest tests.test_leads_api_llm tests.test_lead_pipeline tests.test_lead_review_api` 8/8 ✅；容器内 API 冒烟确认 `/api/v1/leads?limit=1` 已包含 `raw_message` 且仅记录长度 ✅。
+- 限制：当前会话未暴露 in-app Browser/Playwright 控制工具，未做真实点击截图；本地 Vite `http://localhost:3000` 可访问。
 
-### 2026-06-04（补充：DNQ 硬规则 + 自动流水线）
+### 2026-06-05（开发：§2.1 表单 webhook 入站）
 
-- 本轮：新增 6 条确定性 DNQ 硬规则、2 条软风险标记、`dnq_reason` / `risk_flags` 持久化与审计；评分 API 命中 DNQ 后跳过 Gemini，确定性写入 `BD`。
-- 自动化：新增 `POST /api/v1/leads/{lead_id}/pipeline`，依次执行并持久化“提取 → DNQ → 评分 → 起草”；手动录入成功后自动投递同一 Celery 流水线。
-- 验证：完整依赖容器内后端单测 10/10 ✅（含 DNQ/risk rules 8 个 fixture、流水线顺序、DNQ 跳过 LLM）；Python 编译 ✅；`npm run lint` ✅；真实数据库 fixture 返回 `provider=rules`、`BD / DNQ-01`，审计包含 `lead.qualification.persisted` 与 `lead.score.persisted` ✅；真实手动入站已确认自动触发后台流水线，当前停在 Gemini 提取网络 `ConnectTimeout` 并记录脱敏失败日志。
-- 仍未完成：真实 Gemini Key 当前无效，因此完整真实“提取 → 非 DNQ Gemini 评分 → Gemini 起草”待更换 Key 后复测。
-- 下轮建议：更换有效 Gemini Key 后复测 `/api/v1/extraction/email`；随后把 Graph 邮件轮询/表单 webhook 接入同一 Celery 流水线。
+- 本轮：新增通用表单 webhook 入站端点 `POST /api/v1/leads/webhook/form`；支持常见字段别名映射（`Name/Email/Phone/Visa Type/Message/utm_campaign` 等），自动写 `lead_source`、`email_domain`、`raw_message`，并复用现有 Celery pipeline。
+- 安全与日志：新增可选 `FORM_WEBHOOK_SECRET`，配置后请求必须带 `X-Webhook-Secret`；API 日志只记录邮箱域名、字段数量、来源、raw_message 长度，不输出表单原文或 secret。
+- 验证：重建 app/worker 后端镜像；容器后端单测 `python -m unittest discover /app/tests` 55/55 ✅；`npm run lint` ✅；`git diff --check` ✅；容器内真实 API 冒烟确认 webhook 创建 `received` 线索、返回 `pipeline_task_id`、写入 `lead_source=XP349`，审计包含 `lead.received.form_webhook` 与 `lead.pipeline.queued` ✅。
+- 未完成：Graph 邮件轮询仍待四个品牌收件箱地址；前端手动录入来源代码自动识别未做。
 
-### 2026-06-04（补充：提取字段持久化）
+### 2026-06-05（开发：§2.10 角色精简 + 路由配置）
 
-- 本轮：扩展 PostgreSQL `leads` 表，新增 PRD 提取字段列、`extracted_fields` JSONB 快照、`extracted_at` 与提取模型元数据；新增 `PUT /api/v1/leads/{lead_id}/extracted-fields`，用于把 Gemini/人工验证后的结构化提取结果写回线索。
-- 审计：写回提取字段时追加 `lead.extracted_fields.persisted`，metadata 只记录 provider/model/temperature、`email_coherence` 和签证类别是否存在，不记录邮件原文。
-- 验证：`python3 -m py_compile backend/app/*.py backend/app/api/*.py backend/app/repositories/*.py backend/app/services/*.py` ✅；`npm run lint` ✅；`docker compose up -d --build app` ✅；`PUT /api/v1/leads/lead-a72c81a8-f967-44ae-b477-ec17b5ef86ca/extracted-fields` ✅；`GET /api/v1/leads/{lead_id}` 可读回独立字段和 JSON 快照 ✅；`GET /api/v1/leads/{lead_id}/audit-events` 可见提取写回审计 ✅。
-- 仍未完成：LLM 服务层还缺有效 Gemini Key 下的真实回包验证；PostgreSQL 还缺路由/通知、CRM 同步等后续业务表或字段。
-- 下轮建议：更换有效 Gemini Key 后复测完整流水线，并接入 Graph 邮件轮询/表单 webhook。
+- 本轮：按 `doc/角色精简与路由配置-开发规划.md` 完成 6→4 角色收敛；新增 `routing_rules` 表与幂等旧角色迁移；路由引擎改为先判定 category，再按配置收件人通知，空配置兜底 active admin。
+- 后端：新增 `GET/PUT /api/v1/routing/rules`，由 `routing.config` 守护；配置变更写入 `user_audit_events`，metadata 只记录 category、收件人数、fallback 状态，不输出邮箱或隐私原文。
+- 前端：新增 `Routing` 管理页；Users 页角色 chip 与新增用户默认角色收敛到 `admin`/`agent`/`quality_lead`/`reviewer`；清理 `types.ts` 与 `constants.ts` 旧人名角色 mock。
+- 验证：目标后端测试 16/16 ✅；容器完整后端单测 55/55 ✅；`npm run lint` ✅；`npm run build` ✅；重建 app/worker 后 `GET /api/v1/users/roles` 返回 4 角色，`GET /api/v1/routing/rules` 返回 4 category 且空配置兜底 admin ✅。
+- 未完成：权限矩阵自助编辑仍延后；真实 Slack / Push / Email 通知通道仍未接，当前只解决“通知谁”，不解决“用什么渠道通知”。
 
-### 2026-06-04（补充：Gemini 评分/起草服务）
+### 2026-06-05（开发：§2.7 后端异步调研骨架）
 
-- 本轮：按用户决策将评分/起草也改为 Gemini；新增 `GeminiTriageService`，包含 `score_lead()` 与 `draft_for_lead()`，均使用 Gemini REST `generateContent` + JSON Schema，并按阶段记录脱敏日志。
-- API：新增 `POST /api/v1/leads/{lead_id}/score`、`POST /api/v1/leads/{lead_id}/drafts` 调 Gemini 并写回；新增 `PUT /api/v1/leads/{lead_id}/score`、`PUT /api/v1/leads/{lead_id}/drafts` 供离线/调试写入。
-- PostgreSQL：扩展 `leads` 表，新增评分字段、草稿字段、模型元数据和时间戳；写入评分/草稿时生成 `lead.score.persisted`、`lead.drafts.persisted` 审计事件。
-- 前端：`src/services/leadApi.ts` 现在会把后端返回的 `lead_score/score_rationale/email_draft/whatsapp_draft/phone_script` 映射到现有详情页 UI。
-- 验证：Python 编译 ✅；`npm run lint` ✅；`docker compose up -d --build app` ✅；`PUT /score` ✅；`PUT /drafts` ✅；`GET /audit-events` 可见评分和草稿审计 ✅。
-- 仍未完成：当前 Gemini Key 无效，`POST /score` 和 `POST /drafts` 的真实模型回包待更换 Key 后复测；模板库、费用硬编码仍待做。
-- 下轮建议：更换有效 Gemini Key 后复测完整流水线，并将 Graph 邮件轮询/表单 webhook 接入同一入口。
+- 本轮：把 Research Brief 从前端同步 Gemini 迁到后端异步任务；新增 `research_briefs` 持久化、`POST/GET /api/v1/leads/{lead_id}/research`、Celery `run_lead_research`，前端改为后端排队 + 轮询状态。
+- 安全与事实边界：移除前端 `@google/genai` 依赖；未配置真实 Web Search provider 时，后端返回 `failed/WebSearchNotConfigured`，不生成看似真实的客户背景。
+- 验证：`npm run lint` ✅；`npm run build` ✅；`package-lock.json` JSON 校验 ✅；重建 app/worker 后端镜像；容器后端单测 `python -m unittest discover /app/tests` 59/59 ✅；`git diff --check` ✅；容器内真实 API 冒烟确认 research 会排队、写 `lead.research.queued/started/failed` 审计，且无 brief 伪造 ✅。
+- 未完成：真实 Web Search provider 未接；Research Brief 的来源 URL、Consultant Briefing Note、研究驱动 V2 草稿、pipeline 自动触发 research 仍待做。
 
-### 2026-06-04（补充：DNQ 准确性与职责边界文档）
+### 2026-06-06（检查：项目进度与下一步）
 
-- 本轮：补充 `doc/prd.md`、`doc/业务规格.md`、`doc/技术方案与部署规划.md`，明确“Gemini 理解语言并提取事实 → 数据校验识别缺失/冲突 → Python 执行明确硬规则 → 不确定项转人工”的分工。
-- 决策：字段为 `null/unknown`、互相矛盾或证据不足时不得自动 DNQ；Python 的确定性不能弥补上游提取错误或过期规则。
-- 后续验证要求：独立 DNQ fixture 除应命中样本外，还需覆盖非 DNQ 与 unknown 防误杀样本，并记录误杀率。
+- 本轮：按 `.Codex/rules/*` 和 `TODO.md` 检查项目状态；确认 Docker Compose 后端容器仍在运行（app/worker/postgres/redis），仓库存在大量未提交开发成果，视为当前事实基线。
+- 验证：`npm run build` ✅；`npm run lint` ❌，失败于 `src/App.tsx(420,12): Cannot find name 'LeadDetailDrawer'`；`docker exec xpatweb-ai-lead-triage-system-app-1 python -m unittest discover /app/tests` ❌，当前镜像未复制 `backend/tests` 到 `/app/tests`，测试命令不可复现。
+- 结论：下一轮第一优先级不是继续外部集成，而是先修复 §2.12 抽屉化半成品导致的类型检查失败，并修正后端测试运行方式（例如本地测试环境或 Docker 镜像/命令包含 tests），恢复可验证基线。
+- 下轮建议：修复 `LeadDetailDrawer` 类型检查 → 跑通 `npm run lint`/`npm run build` → 修正并跑通后端单测 → 再继续真实通知 channel、真实 Web Search provider 或 Graph 邮件接入。
 
-### 2026-06-04（补充：Celery 可靠队列）
+### 2026-06-06（开发：§2.12 阶段一抽屉骨架）
 
-- 本轮：新增独立 Celery worker 容器与 `app.tasks.run_lead_pipeline`；手动入站和 `POST /api/v1/leads/{lead_id}/pipeline` 统一投递 Redis 队列并返回 `task_id`，新增任务状态查询接口。
-- 可靠性：任务晚确认、worker 丢失重投、单并发；仅网络/超时、HTTP 429/5xx、数据库错误最多重试 3 次，永久 HTTP 4xx 直接失败；审计记录 queued/started/succeeded/failed 与 retry_count。
-- 安全与日志：app/worker 容器改为非 root；Gemini 错误日志只输出脱敏 `status_code/error_status/error_reason`，真实验证识别出 `API_KEY_INVALID`，未输出 Key 或用户原文。
-- 验证：后端容器单测 14/14 ✅；Python 编译 ✅；`npm run lint` ✅；`docker compose config --quiet` ✅；app/worker/postgres/redis 均运行 ✅；真实手动入站返回任务 ID、worker 消费、状态查询、失败审计与永久错误不重试均通过 ✅。
-- 阻塞：当前 `.env` 中 `GEMINI_API_KEY` 无效；更换有效 Key 后才能完成真实提取→评分→起草全链路验证。
+- 本轮：按 `docs/lead-detail-drawer-plan.md` 完成阶段一抽屉骨架；`selectedLeadId` 不再整块替换列表，Dashboard / Review Queue 常驻，详情以右侧宽抽屉滑入；抽屉内重排为 Overview / Research Brief / Activity Audit，Activity Audit 从右栏移入 Tab，60 秒呼叫提示放在 Overview 顶部。
+- Actions：去掉全局 `Edit Drafts` 工作流按钮，底部吸底动作区保留 Return / Archive / Confirm DNQ / Approve & Send；批准发送按已处理状态、无草稿、无 `lead.approve` 权限给出禁用原因。
+- 验证：`npm run lint` ✅；`npm run build` ✅；Vite dev server 在 `http://localhost:3001/` 返回 200 ✅。
+- 未完成：阶段二字段就地编辑、字段级后端接口、字段编辑审计、草稿独立 inline edit 未做；阶段三因当前会话未暴露 Browser/Playwright 控制工具，尚未完成截图级交互验收。
+- 下轮建议：继续 §2.12 阶段二，先做后端 `PATCH /api/v1/leads/{lead_id}/fields` + 仓储 diff 审计，再接前端基础信息 inline edit。
 
-### 2026-06-04（补充：Manual Entry 两步引导式闭环）
+### 2026-06-06（开发：§2.12 底部按钮顺序 + 基础信息就地编辑）
 
-- 前端：侧边栏 `Manual Entry` 改为全局两步弹窗；Step 1 只接收自然语言粘贴，Step 2 自动填充姓名/邮箱/电话/签证并要求选择品牌，可展开编辑全部评分字段；确认后进入详情并每 2 秒轮询任务与线索结果。
-- 后端：新增 `POST /api/v1/extraction/manual`（ShengSuanYun）与 `POST /api/v1/leads/manual-confirmed`；确认字段与原文在同一事务落库并写审计，Celery 使用 `skip_extraction=true` 从 DNQ 开始，禁止覆盖人工修改。
-- 模型：新增 OpenAI 兼容 JSON 客户端；提取使用 ShengSuanYun `google/gemini-3-flash`、`temperature=0`，评分/草稿使用 Kimi `kimi-k2.6` 非思考模式、`temperature=0.6`；任务重试时复用已持久化评分，避免重复计费。
-- 验证：`npm run lint` ✅；`npm run build` ✅；Python 编译与 `git diff --check` ✅；后端容器单测 17/17 ✅；浏览器确认 Manual Entry 从任意页面打开 Step 1 弹窗 ✅；真实 ShengSuanYun 提取、确认式落库、Kimi 评分均成功，真实 Kimi 草稿在关闭思考模式后 HTTP 200 并持久化成功 ✅。
-- 风险：ShengSuanYun 真实请求出现过一次 120 秒 `ReadTimeout`，前端已保留输入并支持重试；后续可增加服务端有限重试或备用提取路由。
+- 本轮：按用户反馈把抽屉最底部动作栏固定为一行 3 个按钮，顺序为 `Approve & Send` / `Return` / `Archive`；`Approve & Send` 放第一位，并继续保留无草稿、已处理、无权限时的禁用原因。
+- 后端：新增 `LeadFieldEditRequest`、`PATCH /api/v1/leads/{lead_id}/fields`、`LeadRepository.edit_fields`；复用 `lead.draft.edit` 权限和 `current_user` actor；字段级 diff 后逐条写 `lead.fields.edited`，metadata 只记录字段名与 changed 标记，不写姓名/邮箱/电话原文。
+- 数据：新增 `leads.assigned_consultant` schema/迁移字段，`LeadRead` 与前端 `Lead.assignedConsultant` 已打通。
+- 前端：新增 `editLeadFields` API 与基础信息行就地编辑；可编辑字段为姓名、邮箱、电话、签证、来源、负责人、品牌，品牌/签证使用下拉；草稿区右上角新增自己的 `Edit Drafts` 入口，底部动作栏不再承担编辑入口。
+- 验证：`npm run lint` ✅；`npm run build` ✅；`git diff --check` ✅；本地 `python3 -m py_compile` ✅；用当前 `backend/` 挂载后端镜像执行 `python -m unittest tests.test_lead_review_api` 4/4 ✅。
+- 未完成：草稿编辑还未拆成每块独立编辑；`lead.fields.edited` 审计前端文案/图标还未人话化；字段编辑尚未做真实浏览器点击验收。
 
+### 2026-06-06（开发：§2.12 草稿独立编辑 + 审计文案）
 
+- 本轮：把草稿区从全局 `editingDraft` 改为按块编辑；Email / Phone / WhatsApp 三个草稿块各自有 Edit / Save / Cancel，保存时只提交对应字段。
+- UI：每个草稿块保存后显示 `Modified` 标记，提醒审批人当前草稿已经人工改过；底部 3 个工作流按钮保持 `Approve & Send` / `Return` / `Archive`。
+- 审计：`Activity Audit` 新增 `lead.fields.edited`、`lead.drafts.edited`、`lead.approved`、`lead.review.rejected`、`lead.reject.confirmed` 的人话文案与图标；字段编辑文案只显示字段名，不显示姓名/邮箱/电话原文。
+- 验证：`npm run lint` ✅；`npm run build` ✅；`git diff --check` ✅；`python3 -m py_compile backend/app/api/leads.py backend/app/repositories/leads.py backend/app/schemas.py backend/app/database.py` ✅；挂载当前 `backend/` 到后端镜像执行 `python -m unittest tests.test_lead_review_api` 4/4 ✅。
+- 未完成：B4 权限矩阵级 HTTP 测试仍需补足；阶段三浏览器交互验收尚未执行。
 
+### 2026-06-06（开发：§2.12 B4 权限测试补齐）
+
+- 本轮：补齐字段编辑 `/fields` 的 HTTP 权限测试；reviewer / approver / quality_lead 通过 FastAPI 依赖链调用返回 403，agent / superadmin 可通过并进入 repository。
+- 仓储测试：补 `LeadRepository.edit_fields` no-change 覆盖，确认字段值不变时返回当前记录且不调用 `execute` 写审计。
+- 验证：挂载当前 `backend/` 到后端镜像执行 `python -m unittest tests.test_lead_review_api` 7/7 ✅；`npm run lint` ✅；`npm run build` ✅；`python3 -m py_compile backend/app/api/leads.py backend/app/repositories/leads.py backend/app/schemas.py backend/app/database.py backend/tests/test_lead_review_api.py` ✅；`git diff --check` ✅。
+- 结论：§2.12 阶段二代码与目标测试已完成；剩余阶段三为真实浏览器/角色/异常态交互验收。
+
+### 2026-06-06（验证：§2.12 阶段三浏览器验收）
+
+- 本轮：补充抽屉可访问性语义，`LeadDetailDrawer` 容器改为 `motion.aside`，`Lead Detail` 改为可定位 heading；字段编辑保存/取消/编辑按钮补 `aria-label`，便于键盘/读屏和 Playwright 稳定定位。
+- 浏览器验收：临时以 `AUTH_ENABLED=true` 启动后端，Playwright 覆盖 superadmin / agent / approver / quality_lead / reviewer；验证抽屉打开、抽屉打开时点击第二条线索可切换、底部按钮为 `Approve & Send` / `Return` / `Archive`、agent 可编辑字段但批准禁用、其他角色无编辑按钮且批准禁用。
+- 证据：`test-results/lead-detail-drawer/report.json` 显示 `failures: []`；截图位于 `test-results/lead-detail-drawer/`。
+- 验证：`npm run lint` ✅；`npm run build` ✅；Playwright 脚本 `test-results/lead-detail-drawer/verify.mjs` ✅。
+- 结论：§2.12 三个阶段均已完成并有静态/后端/浏览器证据；本轮结束前已恢复原 compose app 服务。
+
+## TODO 卸货记录
+
+### 2026-06-05
+
+- 归档（已完成且验证）到 `prd/`：
+  - 后端基础设施 → `prd/backend-infrastructure.md`（§1.2 + §1.3 已完成部分 + §1.4 后端日志）
+  - 线索评分 DNQ 规则 → `prd/lead-scoring.md`（§2.3 DNQ/risk 部分）
+  - 回复模板库 → `prd/reply-drafting.md`（§2.4 模板/费用/DNQ拒绝/品牌）
+  - LLM 合同解耦 → `prd/llm-contract-layer.md`（§1.1 + §2.2 提取合同部分）
+  - Manual Entry 两步闭环 → `prd/manual-entry.md`（§2.1 手动 + §2.2 两步法）
+  - 用户 / 角色 / 权限与管理员用户管理 → `prd/user-management.md`（§2.9 阶段一 + 最小管理员用户管理界面）
+- TODO 精简：§1.1–§1.4、§2.1–§2.4 已完成块折叠为「已归档 → prd/xxx.md」一行索引，仅保留未完成项；开发进度日志 06-01~06-05 功能轮次压缩为摘要。
+- TODO 行数：496 → 约 235；新增 `prd/README.md` 索引。
+- 下轮活跃项：§2.9 用户/角色/权限、§2.3 真实 LLM 评分 + 回归集、§2.5/§2.6 路由与四眼审核真实化。
+
+### 2026-06-05
+
+- 归档：§2.10 角色精简（6→4）+ 路由收件人单独配置 → `prd/user-management.md`
+- TODO 精简：§2.10 四阶段 checkbox 折叠为一条已归档索引；§2.9 剩余项收敛为“权限矩阵自助编辑”。
+- 下轮活跃项：§2.5 真实通知 channel、§2.7 后端异步调研、§2.3 真实 LLM 评分矩阵复测。

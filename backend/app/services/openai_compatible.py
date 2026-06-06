@@ -49,7 +49,7 @@ class OpenAICompatibleJsonClient:
         started_at = time.perf_counter()
 
         try:
-            # Kimi k2.6 在较长草稿输出时常超过一分钟，读取超时放宽到两分钟，
+            # 部分推理模型在较长草稿输出时常超过一分钟，读取超时放宽到两分钟，
             # 由 Celery 继续负责网络失败后的重试。
             async with httpx.AsyncClient(timeout=120) as client:
                 request_body = {
