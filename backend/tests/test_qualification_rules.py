@@ -13,7 +13,9 @@ class QualificationRulesTest(unittest.TestCase):
 
     def test_dnq_02_pr_without_current_visa(self) -> None:
         self.assertEqual(
-            apply_dnq_rules({"visa_category": "PR (Financially Independent)", "current_visa": None}),
+            apply_dnq_rules(
+                {"visa_category": "PR (Financially Independent)", "current_visa": "No valid South African visa"}
+            ),
             (True, "DNQ-02"),
         )
 
@@ -56,10 +58,41 @@ class QualificationRulesTest(unittest.TestCase):
         )
 
     def test_unknown_facts_do_not_trigger_hard_dnq(self) -> None:
-        self.assertEqual(
-            apply_dnq_rules({"visa_category": "Critical Skills Work Visa", "has_job_offer": None}),
-            (False, None),
+        cases = (
+            {"visa_category": "Critical Skills Work Visa", "has_job_offer": None},
+            {"visa_category": "Permanent Residence Permit", "current_visa": None},
+            {"visa_category": "Permanent Residence Permit", "current_visa": "Unknown"},
+            {
+                "visa_category": "Permanent Residence Permit",
+                "pr_route": None,
+                "qualifying_work_visa_years": None,
+            },
+            {"visa_category": "Appeal Application", "rejection_date": None},
+            {"visa_category": "Visitors Visa Section 11(1)", "is_first_world": None},
         )
+        for extracted in cases:
+            with self.subTest(extracted=extracted):
+                self.assertEqual(apply_dnq_rules(extracted), (False, None))
+
+    def test_near_miss_cases_do_not_trigger_hard_dnq(self) -> None:
+        cases = (
+            {"visa_category": "Critical Skills Work Visa", "has_job_offer": True},
+            {"visa_category": "Permanent Residence Permit", "current_visa": "Visitor Visa"},
+            {
+                "visa_category": "Permanent Residence Permit",
+                "pr_route": "work_visa",
+                "qualifying_work_visa_years": 4,
+            },
+            {"visa_category": "Visitors Visa Section 11(6)", "marriage_type": "registered"},
+            {"visa_category": "Appeal Application", "rejection_date": "2026-05-25"},
+            {"visa_category": "Visitors Visa Section 11(1)", "is_first_world": False},
+        )
+        for extracted in cases:
+            with self.subTest(extracted=extracted):
+                self.assertEqual(
+                    apply_dnq_rules(extracted, as_of=date(2026, 6, 1)),
+                    (False, None),
+                )
 
     def test_soft_rules_never_become_hard_dnq(self) -> None:
         extracted = {
@@ -69,6 +102,15 @@ class QualificationRulesTest(unittest.TestCase):
         }
         self.assertEqual(apply_dnq_rules(extracted), (False, None))
         self.assertEqual(apply_risk_flags(extracted), ("RISK-01",))
+
+    def test_visitor_11_6_soft_risk_only(self) -> None:
+        extracted = {
+            "visa_category": "Visitors Visa Section 11(6)",
+            "marriage_type": "registered",
+            "relationship_duration": "weak_evidence",
+        }
+        self.assertEqual(apply_dnq_rules(extracted), (False, None))
+        self.assertEqual(apply_risk_flags(extracted), ("RISK-02",))
 
 
 if __name__ == "__main__":

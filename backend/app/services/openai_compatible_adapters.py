@@ -13,6 +13,7 @@ from app.services.openai_compatible import OpenAICompatibleJsonClient
 from app.services.triage_contract import (
     DRAFT_SCHEMA,
     OPENAI_COMPATIBLE_TRIAGE_TEMPERATURE,
+    SCORE_TEMPERATURE,
     SCORE_SCHEMA,
     build_draft_prompt,
     build_score_prompt,
@@ -41,6 +42,7 @@ class OpenAICompatibleExtractionAdapter:
             api_key=api_key,
             model=model,
             logger=logger,
+            thinking_disabled=True,
         )
 
     async def extract_manual_text(self, raw_text: str) -> ExtractedEmailFields:
@@ -89,7 +91,7 @@ class OpenAICompatibleTriageAdapter:
         self.provider = provider
         self.score_model = model
         self.draft_model = model
-        self.score_temperature = OPENAI_COMPATIBLE_TRIAGE_TEMPERATURE
+        self.score_temperature = SCORE_TEMPERATURE
         self.draft_temperature = OPENAI_COMPATIBLE_TRIAGE_TEMPERATURE
         self.client = OpenAICompatibleJsonClient(
             provider=provider,

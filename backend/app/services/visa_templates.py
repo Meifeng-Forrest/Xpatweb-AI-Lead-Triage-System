@@ -122,6 +122,184 @@ TOP_10_TEMPLATES: tuple[VisaDraftTemplate, ...] = (
 )
 
 
+ADDITIONAL_SERVICE_TEMPLATES: tuple[VisaDraftTemplate, ...] = (
+    VisaDraftTemplate(
+        template_id="TMPL_POSITIVE_VISITOR_11_2",
+        canonical_name="Visitor Visa 11(2)",
+        aliases=("visitor visa 11(2)", "visitors visa section 11(2)", "section 11(2)"),
+        bucket="B",
+        professional_fee_zar="Quote on assessment",
+        admin_fee_zar=None,
+        materials=("Purpose of visit proof", "Employer or host support", "Valid passport"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_POSITIVE_BUSINESS_VISA",
+        canonical_name="Business Visa",
+        aliases=("business visa",),
+        bucket="B",
+        professional_fee_zar="Quote on assessment",
+        admin_fee_zar=None,
+        materials=("Business plan", "Investment proof", "Company registration or supporting documents"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_POSITIVE_CORPORATE_VISA",
+        canonical_name="Corporate Visa",
+        aliases=("corporate visa",),
+        bucket="B",
+        professional_fee_zar="Quote on assessment",
+        admin_fee_zar=None,
+        materials=("Corporate workforce motivation", "Employer compliance documents", "Role and headcount details"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_POSITIVE_IMMIGRATION_AUDIT",
+        canonical_name="Immigration Audit",
+        aliases=("immigration audit", "audit"),
+        bucket="B",
+        professional_fee_zar="Quote on assessment",
+        admin_fee_zar=None,
+        materials=("Employee visa list", "Current permits", "Employer compliance records"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_POSITIVE_VOLUNTEER_VISA",
+        canonical_name="Volunteer Visa",
+        aliases=("volunteer visa",),
+        bucket="C",
+        professional_fee_zar="R20,860",
+        admin_fee_zar=None,
+        materials=("Volunteer placement letter", "Purpose of stay", "Valid passport"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_POSITIVE_MAURITIAN_PREMIUM_VISA",
+        canonical_name="Mauritian Premium Visa",
+        aliases=("mauritian premium visa", "premium visa"),
+        bucket="C",
+        professional_fee_zar="R18,560",
+        admin_fee_zar=None,
+        materials=("Remote income proof", "Accommodation proof", "Valid passport"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_POSITIVE_VISITOR_11_1",
+        canonical_name="Visitor Visa 11(1)",
+        aliases=("visitor visa 11(1)", "visitors visa section 11(1)", "section 11(1)"),
+        bucket="C",
+        professional_fee_zar="R16,860",
+        admin_fee_zar="R2,680",
+        materials=("Purpose of visit proof", "Travel itinerary", "Valid passport"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_POSITIVE_MEDICAL_TREATMENT_VISA",
+        canonical_name="Medical Treatment Visa",
+        aliases=("medical treatment visa", "medical visa"),
+        bucket="C",
+        professional_fee_zar="R16,820",
+        admin_fee_zar="R1,550",
+        materials=("Medical treatment letter", "Proof of funds", "Valid passport"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_POSITIVE_TRANSFER_RECTIFICATION",
+        canonical_name="Transfer & Rectification",
+        aliases=("transfer and rectification", "transfer & rectification", "rectification"),
+        bucket="C",
+        professional_fee_zar="R10,860",
+        admin_fee_zar="R2,658",
+        materials=("Current visa copy", "Passport copy", "Error or transfer details"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_POSITIVE_LITIGATION",
+        canonical_name="Litigation",
+        aliases=("litigation", "visa escalation and litigation"),
+        bucket="C",
+        professional_fee_zar="Separately invoiced",
+        admin_fee_zar=None,
+        materials=("Decision or delay evidence", "Full application history", "Supporting correspondence"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_POSITIVE_ACCOMPANYING_DEPENDENT",
+        canonical_name="Accompanying Dependent Visa",
+        aliases=("accompanying dependent", "accompanying child", "dependent visa"),
+        bucket="C",
+        professional_fee_zar="Quote on assessment",
+        admin_fee_zar=None,
+        materials=("Principal applicant documents", "Relationship proof", "Valid passport"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_POSITIVE_RESEARCH_VISA",
+        canonical_name="Research Visa",
+        aliases=("research visa", "visitor's visa section 11(1)(b)(iii)"),
+        bucket="C",
+        professional_fee_zar="Quote on assessment",
+        admin_fee_zar=None,
+        materials=("Research invitation", "Institution support", "Valid passport"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_SERVICE_VISA_ASSESSMENT",
+        canonical_name="Visa Assessment/Consultation",
+        aliases=("visa assessment", "consultation", "diagnostic assessment"),
+        bucket="Service",
+        professional_fee_zar="R4,280",
+        admin_fee_zar=None,
+        materials=("Brief facts summary", "Current visa status", "Target outcome"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_SERVICE_FORMAL_VERIFICATION",
+        canonical_name="Formal Verification",
+        aliases=("formal verification",),
+        bucket="Service",
+        professional_fee_zar="R5,280",
+        admin_fee_zar=None,
+        materials=("Document to verify", "Identity document", "Authority or reference details"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_SERVICE_INFORMAL_VERIFICATION",
+        canonical_name="Informal Verification",
+        aliases=("informal verification",),
+        bucket="Service",
+        professional_fee_zar="R2,840",
+        admin_fee_zar=None,
+        materials=("Document to verify", "Identity document", "Verification context"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_SERVICE_POLICE_CLEARANCE",
+        canonical_name="Police Clearance Certificate",
+        aliases=("police clearance", "police clearance certificate"),
+        bucket="Service",
+        professional_fee_zar="R11,420",
+        admin_fee_zar=None,
+        materials=("Identity document", "Fingerprint requirements", "Country history details"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_SERVICE_SAQA_CERTIFICATE",
+        canonical_name="SAQA Certificate",
+        aliases=("saqa", "saqa certificate", "saqa evaluation"),
+        bucket="Service",
+        professional_fee_zar="Separately invoiced",
+        admin_fee_zar=None,
+        materials=("Qualification certificate", "Academic transcript", "Identity document"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_SERVICE_ESCALATORY_LETTERS",
+        canonical_name="Escalatory Letters",
+        aliases=("escalatory letters", "escalatory letter", "escalation letters"),
+        bucket="Service",
+        professional_fee_zar="R37,680",
+        admin_fee_zar=None,
+        materials=("Application reference", "Proof of submission", "Delay timeline"),
+    ),
+    VisaDraftTemplate(
+        template_id="TMPL_SERVICE_COURT_APPLICATION",
+        canonical_name="Court Application",
+        aliases=("court application", "urgent court application"),
+        bucket="Service",
+        professional_fee_zar="R63,000-R78,000; urgent R114,500-R167,200",
+        admin_fee_zar=None,
+        materials=("Full case history", "Decision or delay evidence", "Urgency motivation"),
+    ),
+)
+
+
+ALL_DRAFT_TEMPLATES: tuple[VisaDraftTemplate, ...] = (*TOP_10_TEMPLATES, *ADDITIONAL_SERVICE_TEMPLATES)
+
+
 DNQ_TEMPLATES: dict[str, DnqDraftTemplate] = {
     "DNQ-01": DnqDraftTemplate(
         template_id="TMPL_DNQ_01_CRITICAL_SKILLS_NO_JOB_OFFER",
@@ -202,7 +380,7 @@ def find_template(visa_category: str | None) -> VisaDraftTemplate | None:
     normalized = _normalize(visa_category)
     if not normalized:
         return None
-    for template in TOP_10_TEMPLATES:
+    for template in ALL_DRAFT_TEMPLATES:
         candidates = (template.canonical_name, *template.aliases)
         if any(_normalize(candidate) in normalized or normalized in _normalize(candidate) for candidate in candidates):
             return template
@@ -256,7 +434,8 @@ def build_dnq_draft(lead: LeadRecord) -> DraftResult | None:
         f"Based on the information currently available, this matter requires review before we can proceed, as {template.client_reason}.\n\n"
         "Possible next steps for review:\n"
         f"{alternatives}\n\n"
-        "Our team will review the available facts and confirm the appropriate response before any final communication is sent.\n\n"
+        "This draft must be reviewed before any final communication is sent. "
+        "Our team will review the available facts and confirm the appropriate response.\n\n"
         f"Kind regards,\n{brand}"
     )
     internal_post = (

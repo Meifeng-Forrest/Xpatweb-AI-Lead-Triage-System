@@ -1502,10 +1502,10 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
-  escalation: '升级',
+  escalation: 'Escalation',
   dnq_reject: 'DNQ',
-  visa_verification: '签证',
-  standard_review: '常规',
+  visa_verification: 'Visa',
+  standard_review: 'Standard',
 };
 
 const ROUTING_CATEGORIES = ['escalation', 'dnq_reject', 'visa_verification', 'standard_review'];

@@ -1,7 +1,14 @@
 import unittest
 from types import SimpleNamespace
 
-from app.services.visa_templates import DNQ_TEMPLATES, TOP_10_TEMPLATES, build_template_draft, find_template
+from app.services.visa_templates import (
+    ADDITIONAL_SERVICE_TEMPLATES,
+    ALL_DRAFT_TEMPLATES,
+    DNQ_TEMPLATES,
+    TOP_10_TEMPLATES,
+    build_template_draft,
+    find_template,
+)
 
 
 def lead(**overrides):
@@ -25,6 +32,26 @@ class VisaTemplatesTest(unittest.TestCase):
         for template in TOP_10_TEMPLATES:
             self.assertTrue(template.professional_fee_zar.startswith("R"))
 
+    def test_template_catalog_covers_business_spec_fee_items(self) -> None:
+        self.assertGreaterEqual(len(ADDITIONAL_SERVICE_TEMPLATES), 18)
+        self.assertGreaterEqual(len(ALL_DRAFT_TEMPLATES), 28)
+
+        expected_templates = {
+            "TMPL_POSITIVE_BUSINESS_VISA",
+            "TMPL_POSITIVE_CORPORATE_VISA",
+            "TMPL_POSITIVE_IMMIGRATION_AUDIT",
+            "TMPL_POSITIVE_VISITOR_11_1",
+            "TMPL_POSITIVE_MEDICAL_TREATMENT_VISA",
+            "TMPL_SERVICE_VISA_ASSESSMENT",
+            "TMPL_SERVICE_FORMAL_VERIFICATION",
+            "TMPL_SERVICE_INFORMAL_VERIFICATION",
+            "TMPL_SERVICE_POLICE_CLEARANCE",
+            "TMPL_SERVICE_SAQA_CERTIFICATE",
+            "TMPL_SERVICE_ESCALATORY_LETTERS",
+            "TMPL_SERVICE_COURT_APPLICATION",
+        }
+        self.assertTrue(expected_templates <= {template.template_id for template in ALL_DRAFT_TEMPLATES})
+
     def test_template_draft_uses_hardcoded_retired_person_fees(self) -> None:
         result = build_template_draft(lead())
 
@@ -40,6 +67,25 @@ class VisaTemplatesTest(unittest.TestCase):
     def test_unknown_visa_does_not_generate_a_fee_quote(self) -> None:
         self.assertIsNone(find_template("Unlisted experimental visa"))
         self.assertIsNone(build_template_draft(lead(visa_category="Unlisted experimental visa")))
+
+    def test_additional_service_templates_use_hardcoded_fees(self) -> None:
+        result = build_template_draft(lead(visa_category="Visa Assessment"))
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.template_id, "TMPL_SERVICE_VISA_ASSESSMENT")
+        self.assertEqual(result.professional_fee_zar, "R4,280")
+        self.assertEqual(result.fee_source, "doc/业务规格.md §3.3")
+        self.assertIn("R4,280", result.email_draft)
+
+    def test_court_application_template_preserves_range_without_llm_quote(self) -> None:
+        result = build_template_draft(lead(visa_category="Urgent Court Application"))
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.template_id, "TMPL_SERVICE_COURT_APPLICATION")
+        self.assertIn("R114,500-R167,200", result.professional_fee_zar or "")
+        self.assertIn("R114,500-R167,200", result.email_draft)
 
     def test_gd_template_prefers_consultation_booking(self) -> None:
         result = build_template_draft(lead(lead_score="GD", visa_category="Remote Work Visa", source_box="RISA"))
@@ -75,6 +121,9 @@ class VisaTemplatesTest(unittest.TestCase):
         self.assertIsNone(result.professional_fee_zar)
         self.assertIn("formal job offer", result.email_draft)
         self.assertIn("Route to Marisa/QA", result.internal_whatsapp_post or "")
+        self.assertIn("reviewed before any final communication is sent", result.email_draft)
+        self.assertNotIn("professional fee", result.email_draft.lower())
+        self.assertIsNone(result.phone_script)
         self.assertGreaterEqual(len(result.alternative_suggestions), 1)
 
     def test_dnq_template_covers_visitor_11_1_without_positive_template(self) -> None:

@@ -43,6 +43,7 @@ class OpenAICompatibleJsonClient:
             "provider": self.provider,
             "model": self.model,
             "temperature": temperature,
+            "reasoning_disabled": self.thinking_disabled,
             "prompt": summarize_text(prompt),
         }
         self.logger.info("%s enter %s", tag, request_summary)
@@ -59,7 +60,11 @@ class OpenAICompatibleJsonClient:
                     "response_format": {"type": "json_object"},
                     "messages": [{"role": "user", "content": prompt}],
                 }
-                if self.thinking_disabled:
+                if self.thinking_disabled and self.provider == "shengsuanyun":
+                    # 实测 Shengsuanyun 的 Gemini 路由会忽略 thinking.type=disabled；
+                    # reasoning.enabled=false 才会停止 reasoning token 消耗。
+                    request_body["reasoning"] = {"enabled": False}
+                elif self.thinking_disabled:
                     request_body["thinking"] = {"type": "disabled"}
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
@@ -70,7 +75,13 @@ class OpenAICompatibleJsonClient:
                     json=request_body,
                 )
             response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
+            response_data = response.json()
+            choice = response_data["choices"][0]
+            content = choice["message"]["content"]
+            if not content:
+                finish_reason = choice.get("finish_reason")
+                usage = response_data.get("usage")
+                raise ValueError(f"Model response content is empty; finish_reason={finish_reason}; usage={usage}")
             data = json.loads(content)
             if not isinstance(data, dict):
                 raise ValueError("Model response JSON must be an object")

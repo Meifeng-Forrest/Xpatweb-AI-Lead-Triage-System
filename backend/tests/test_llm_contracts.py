@@ -76,6 +76,13 @@ class LlmContractsTest(unittest.TestCase):
         self.assertIn("XP", email_prompt)
         self.assertIn("Retirement visa", email_prompt)
         self.assertIn("JSON Schema", manual_prompt)
+        self.assertIn("domestic worker", manual_prompt)
+        self.assertIn("General Work Visa", manual_prompt)
+        self.assertIn("Visa Assessment", email_prompt)
+        self.assertIn("email_domain: classify", manual_prompt)
+        self.assertIn("lead_type: Individual", manual_prompt)
+        self.assertIn("annual_salary_zar", manual_prompt)
+        self.assertIn("marriage_type", manual_prompt)
 
     def test_triage_prompts_share_contract_schema(self) -> None:
         lead = lead_fixture()
@@ -87,7 +94,16 @@ class LlmContractsTest(unittest.TestCase):
         self.assertIn("lead_score", SCORE_SCHEMA["required"])
         self.assertIn("email_draft", DRAFT_SCHEMA["required"])
         self.assertIn("Retired Person Visa", score_prompt)
+        self.assertIn("doc/业务规格.md §10.3", score_prompt)
+        self.assertIn("FEW-SHOT EXAMPLES FROM doc/业务规格.md §13.3", score_prompt)
+        self.assertEqual(score_prompt.count("INPUT:"), 30)
+        self.assertEqual(score_prompt.count("OUTPUT:"), 30)
+        self.assertIn("domestic worker", score_prompt)
+        self.assertIn("score BD with medium confidence", score_prompt)
         self.assertIn("Do not invent prices", draft_prompt)
+        self.assertIn("South African formal English", draft_prompt)
+        self.assertIn("Do not use contractions", draft_prompt)
+        self.assertIn("BD email_draft", draft_prompt)
         self.assertIn("JSON Schema", schema_prompt)
 
     def test_services_do_not_use_supplier_named_business_modules(self) -> None:

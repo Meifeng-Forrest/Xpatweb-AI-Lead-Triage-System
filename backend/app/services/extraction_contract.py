@@ -8,6 +8,46 @@ from app.schemas import EmailExtractionRequest, ExtractedEmailFields
 
 EXTRACTION_TEMPERATURE = 0.0
 
+XPATWEB_SERVICE_CATEGORIES = (
+    "Retired Person Visa",
+    "Remote Work Visa",
+    "PR (Financially Independent)",
+    "Permanent Residence Permit",
+    "Critical Skills Work Visa",
+    "General Work Visa",
+    "Visitor 11(6)",
+    "Visitors Visa Section 11(1)",
+    "Intra-Company Transfer",
+    "Visitor 11(2)",
+    "Business Visa",
+    "Corporate Visa",
+    "Immigration Audit",
+    "Appeal Application",
+    "Litigation",
+    "Relative's Visa",
+    "Relative's Spouse Visa",
+    "Accompanying Dependent",
+    "Study Visa",
+    "Research Visa",
+    "Volunteer Visa",
+    "Visa Verification",
+    "Visa Assessment",
+    "Points-Based System",
+)
+
+
+EXTRACTION_FIELD_GUIDANCE = """
+Field guidance from doc/业务规格.md §3.1 / §10.1:
+- email_domain: classify the sender address as corporate, gmail, or other_personal. Do not output the literal domain string.
+- lead_type: Individual = personal applicant; Corporate Individual = employee or representative asking for one person; Corporate = company or HR/Director/PA asking for company work.
+- visa_category: use the closest Xpatweb service category; use "Unknown" only when no service route can be inferred.
+- annual_salary_zar: if salary is mentioned in another currency, normalize to ZAR when enough information is present; otherwise null.
+- relationship_duration: preserve the relationship evidence phrase for Visitor 11(6), Relative's Visa, or spousal routes. Use values like less_than_1_month, newly_married, weak_evidence, unspecified, or the factual duration when stated.
+- marriage_type: registered for civil/formal marriage, traditional for traditional marriage, common-law for common-law/unregistered partnership, unregistered where the message clearly says not formally registered.
+- has_job_offer: true only for a formal offer or clear employment basis; false only when the message clearly says there is no offer; null when not stated.
+- email_coherence: high for clear professional writing, medium for understandable but sparse writing, low for incoherent writing or significant spelling/grammar problems.
+""".strip()
+
 
 EXTRACTION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -104,6 +144,13 @@ Do not invent facts. If a field is absent, output null, except:
 - sender_name must be "Not Provided" when absent
 - urgency_flag and multi_visa_flag must be false when absent
 - email_coherence must be high, medium, or low
+- visa_category should use the closest category from this service list where possible:
+  {", ".join(XPATWEB_SERVICE_CATEGORIES)}
+- If the enquiry asks about employing or relocating a household employee, domestic worker,
+  nanny, housekeeper, or other non-specialist worker to South Africa, use "General Work Visa"
+  when the question is about a work visa, otherwise use "Visa Assessment".
+
+{EXTRACTION_FIELD_GUIDANCE}
 
 {schema_instruction(EXTRACTION_SCHEMA)}
 
@@ -121,6 +168,13 @@ The brand receiving this lead is: {payload.source_box.value} (XP / RISA / VLS / 
 Extract fields from the incoming inquiry. Do NOT score, qualify, reject, or draft a reply.
 If a field is not present, output null, except sender_name should be "Not Provided".
 Do not invent facts. Use only the subject, from header, and body below.
+visa_category should use the closest category from this service list where possible:
+{", ".join(XPATWEB_SERVICE_CATEGORIES)}
+If the enquiry asks about employing or relocating a household employee, domestic worker,
+nanny, housekeeper, or other non-specialist worker to South Africa, use "General Work Visa"
+when the question is about a work visa, otherwise use "Visa Assessment".
+
+{EXTRACTION_FIELD_GUIDANCE}
 
 {schema_instruction(EXTRACTION_SCHEMA)}
 

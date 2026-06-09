@@ -17,7 +17,7 @@
     "as_of": "2026-06-05",
     "input": {
       "visa_category": "PR (Financially Independent)",
-      "current_visa": null
+      "current_visa": "No valid South African visa"
     },
     "expected": {
       "is_dnq": true,

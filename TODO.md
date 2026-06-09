@@ -119,6 +119,8 @@
 - **已归档**：完整提取字段集 schema + `/api/v1/extraction/email`/`/manual` + 提取字段写回 + `extraction_contract` 统一合同 → `prd/llm-contract-layer.md`
 - **已归档**：两步法拆分（提取→确认→DNQ→评分→模板或 LLM 起草，确认字段不被覆盖）→ `prd/manual-entry.md`
 - 更换有效 Key / 网络可达后跑通真实 LLM 提取回包
+  - 2026-06-09：提取 prompt 已补 Xpatweb service category 清单，并明确 domestic worker / housekeeper / nanny 等家庭雇佣工作签证咨询应归到 `General Work Visa` 或 `Visa Assessment`，减少 `visa_category=Unknown` 对评分的干扰。
+  - 2026-06-09：按 `业务规格.md §3.1/§10.1` 补齐提取字段解释（`email_domain`、`lead_type`、`annual_salary_zar`、`relationship_duration`、`marriage_type`、`has_job_offer`、`email_coherence`），并用合同测试锁住 prompt 约束；仍未调用真实 LLM。
 - 把 Graph 邮件轮询接到该提取服务（依赖 §2.1 邮件接入）
   - 2026-06-05：表单 webhook 已接入同一入站流水线并触发后续提取/评分/起草；Graph 邮件仍待客户提供四个品牌邮箱地址后接入。
 
@@ -126,15 +128,22 @@
 
 - **已归档**：DNQ 6 条硬规则 + 软规则 risk_flags + DNQ 命中确定性 BD 评分（含评分/写回 API）→ `prd/lead-scoring.md`
 - 评分矩阵：未命中 DNQ → 真实 LLM 评分 → GD/MF/MD/BD（依赖有效 Key 复测）
+  - 2026-06-09：实际评分 prompt 已补 `业务规格.md §10.3/§13` 的关键历史信号和 few-shot 摘要；新增 domestic worker / housekeeper 私人家庭雇佣场景的 BD/Bad-fit guardrail；OpenAI-compatible 评分温度改为 0，减少 MD/BD 边界漂移。
+  - 2026-06-09：新增 `scoring_examples.py`，将 `业务规格.md §13.3` 30 条 few-shot 全量注入评分 prompt，并准备 §13.4 40 条离线回归样本；历史 `Bad` 统一映射为系统枚举 `BD`。
 - [x] 置信度标记驱动流程门控：低置信度**标记待人工确认**
   - 2026-06-05：`score_confidence=low` 写回评分时状态进入 `in_review`；后续写入草稿不会覆盖该人工审核状态；容器内真实 API 冒烟通过。
 - [ ] **回归测试集验证 ≥85% 一致率**（`业务规格.md §13.4`，上线前必跑的 gate）
   - [x] 2026-06-05：新增确定性回归 fixture（DNQ-01~06、RISK-01/02、unknown 不自动 DNQ、明显优质样例）与 `test_lead_regression_cases.py`；当前 Python 硬规则一致率 100%。
+  - [x] 2026-06-09：新增合同测试覆盖 service list、domestic worker guardrail、§10.3/§13 提示词注入和评分温度 0；目标容器测试 `tests.test_lead_regression_cases tests.test_llm_contracts tests.test_openai_compatible_adapters` 10/10 ✅。
+  - [x] 2026-06-09：强化 DNQ/软风险离线测试，覆盖 hard DNQ 命中、unknown 不命中、near-miss 不命中、PBS/Visitor 11(6) 只打 `risk_flags`；修正 DNQ-02 为“明确无有效南非签证”才自动拒绝，`current_visa=null/Unknown` 不再误杀。
+  - [x] 2026-06-09：离线样本测试确认 §13.3 few-shot 数量 30（10 GD / 8 MF / 6 MD / 6 BD）、§13.4 回归样本数量 40（12 GD / 6 MF / 10 MD / 12 BD），且 two sets row id 不重叠。
   - [ ] 真实 LLM 评分矩阵一致率：仍依赖有效 Key / 网络可达后跑通，不在本轮强行打勾。
 
 ### 2.4 回复起草（PRD §4.4）
 
 - **已归档**：Top 10 正向模板 + 6 条 DNQ 拒绝模板 + 费用硬编码（防捏造）+ 品牌署名 + 分级差异化草稿 + 内部 Box–Quality–Action 草稿 → `prd/reply-drafting.md`
+- 2026-06-09：模板目录已从 Top 10 扩展到 `业务规格.md §3.3` 的 Bucket A/B/C 与附加服务费用项（Visa Assessment、Formal/Informal Verification、Police Clearance、SAQA、Escalatory Letters、Court Application 等）；未知签证仍不报价，DNQ 模板仍优先且不生成费用/电话话术。
+- 2026-06-09：LLM fallback 起草 prompt 已补 South African formal English、禁止 contractions、禁止编造费用/法律要求、GD/MF/MD/BD 差异化结构；模板命中路径仍优先跳过 LLM。
 - 研究驱动 V2 草稿，与 V1 并排（依赖 §2.7）
 - MVP 系统内管理员审核门控（WhatsApp 点赞移 Phase 2，见 §10）
 - SMV 正式品牌署名待客户确认后更新映射
@@ -458,6 +467,40 @@
 - 证据：`test-results/lead-detail-drawer/report.json` 显示 `failures: []`；截图位于 `test-results/lead-detail-drawer/`。
 - 验证：`npm run lint` ✅；`npm run build` ✅；Playwright 脚本 `test-results/lead-detail-drawer/verify.mjs` ✅。
 - 结论：§2.12 三个阶段均已完成并有静态/后端/浏览器证据；本轮结束前已恢复原 compose app 服务。
+
+### 2026-06-09（UI 文案：Routing 标签英文化）
+
+- 本轮：按演示界面反馈，将 Users 表格与用户编辑弹窗中的 Routing category 标签从中文改为英文；`升级` → `Escalation`，`常规` → `Standard`，`签证` → `Visa`，`DNQ` 保持不变。
+- 范围：仅修改前端显示文案 `CATEGORY_LABELS`，不改后端 category key、不改数据库和权限逻辑。
+- 验证：`npm run lint` ✅。
+
+### 2026-06-09（修复：Manual Entry 提取禁用 reasoning）
+
+- 问题：Manual Entry 粘贴文本调用 `/api/v1/extraction/manual` 时，Shengsuanyun Gemini 路由返回 HTTP 200，但 `finish_reason=length` 且 `message.content` 为空；前端因此显示 `Could not extract information from the pasted text.`。
+- 根因：提取请求未使用该路由实际生效的禁 reasoning 参数；`thinking.type=disabled` / `reasoning_effort=none` / `thinking_config.thinking_budget=0` 实测仍会消耗 `reasoning_tokens`。
+- 本轮：`OpenAICompatibleExtractionAdapter` 显式禁用 thinking；`OpenAICompatibleJsonClient` 对 Shengsuanyun 写入实测有效的 `reasoning: { enabled: false }`，并在日志摘要增加 `reasoning_disabled`；空 `message.content` 时抛出带 `finish_reason/usage` 的明确错误。
+- 验证：容器内实测 `reasoning.enabled=false` 后 `reasoning_tokens=null`、`finish_reason=stop`、正文为 JSON；重启 app/worker 后真实 `POST /api/v1/extraction/manual` 返回 200 和完整 extracted 字段；`python3 -m py_compile app/services/openai_compatible.py app/services/openai_compatible_adapters.py tests/test_openai_compatible_adapters.py` ✅。本机未跑后端 unittest，因本机 Python 缺 `asyncpg` / `email-validator`；容器镜像未包含 `/app/tests` 目录。
+
+### 2026-06-09（修复：domestic worker 线索误评 MD）
+
+- 问题：私人家庭为 Kenyan housekeeper / domestic worker 咨询赴南非工作签证时，提取阶段把签证类型留为 `Unknown`，评分 prompt 又把“清晰但低价值的单一咨询”落到 MD，未体现业务规格中的历史低适配口径。
+- 本轮：提取 prompt 补 Xpatweb service category 清单，并把 household/domestic worker/nanny/housekeeper 工作咨询归到 `General Work Visa` 或 `Visa Assessment`；评分 prompt 补 `业务规格.md §10.3/§13` 关键历史信号和 few-shot 摘要，新增 domestic worker 私人家庭雇佣场景 BD/Bad-fit guardrail；OpenAI-compatible 评分温度改为 0。
+- 验证：`python3 -m py_compile backend/app/services/extraction_contract.py backend/app/services/triage_contract.py backend/app/services/openai_compatible_adapters.py backend/tests/test_llm_contracts.py backend/tests/test_openai_compatible_adapters.py` ✅；容器挂载当前后端执行 `python -m unittest tests.test_lead_regression_cases tests.test_llm_contracts tests.test_openai_compatible_adapters` 10/10 ✅。
+- 未完成：真实 LLM 对 40 条 §13.4 回归集的 ≥85% 一致率仍需有效 Key / 网络可达后执行；本轮只锁住 prompt 合同与该类误评 guardrail。
+
+### 2026-06-09（UI 文案：浏览器标签标题）
+
+- 本轮：将 `index.html` 浏览器标签标题从 `My Google AI Studio App` 改为 `AI Lead Triage System`。
+- 范围：仅修改 HTML `<title>`，不改页面 UI、包名、后端 API 或运行配置。
+- 验证：`rg` 确认旧标题不再存在；`npm run lint` ✅。
+
+### 2026-06-09（业务规格对齐：离线合同 / 模板 / 回归资产）
+
+- 本轮：按 `doc/业务规格.md` 对齐提取 prompt、DNQ unknown 边界、评分 System Prompt、§13.3 few-shot、§13.4 离线回归样本、回复模板目录与 LLM fallback 起草结构；不调用真实 LLM，不新增数据库字段，不改变 API wire shape。
+- 关键修正：DNQ-02 从“`current_visa` 缺失即拒绝”改为“明确无有效南非签证才拒绝”，`null/Unknown` 转人工；PBS 与 Visitor 11(6) 继续只打软风险，不硬拒绝。
+- 模板：保留 Top 10 正向模板，新增 §3.3 附加服务与剩余费用项模板；DNQ 草稿明确“reviewed before any final communication is sent”，不报价、不生成电话话术。
+- 验证：`python3 -m py_compile ...` ✅；容器挂载后端执行 `python -m unittest tests.test_llm_contracts tests.test_qualification_rules tests.test_lead_regression_cases tests.test_visa_templates tests.test_openai_compatible_adapters tests.test_scoring_examples` 35/35 ✅；`npm run lint` ✅；`git diff --check` ✅。
+- 未完成：真实 LLM 对 §13.4 40 条回归集的 ≥85% 一致率仍依赖有效 Key / 网络可达后执行；本轮只完成离线合同与测试资产。
 
 ## TODO 卸货记录
 

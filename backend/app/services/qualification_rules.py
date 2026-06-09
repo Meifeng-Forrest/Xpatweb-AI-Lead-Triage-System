@@ -39,6 +39,27 @@ def _parse_date(value: Any) -> date | None:
         return None
 
 
+def _is_explicit_negative(value: Any) -> bool:
+    if value is False:
+        return True
+    if value is None or value is True:
+        return False
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return False
+    return normalized in {
+        "no",
+        "none",
+        "no visa",
+        "no current visa",
+        "no valid visa",
+        "no valid south african visa",
+        "expired",
+        "expired visa",
+        "not valid",
+    }
+
+
 def is_beyond_10_working_days(rejection_date: Any, *, as_of: date | None = None) -> bool:
     rejected_on = _parse_date(rejection_date)
     today = as_of or date.today()
@@ -65,8 +86,8 @@ def apply_dnq_rules(
     if visa == "Critical Skills Work Visa" and _value(extracted, "has_job_offer") is False:
         return True, "DNQ-01"
 
-    if visa in ("Permanent Residence Permit", "PR (Financially Independent)") and not _value(
-        extracted, "current_visa"
+    if visa in ("Permanent Residence Permit", "PR (Financially Independent)") and _is_explicit_negative(
+        _value(extracted, "current_visa")
     ):
         return True, "DNQ-02"
 

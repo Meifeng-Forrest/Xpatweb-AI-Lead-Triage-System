@@ -2,12 +2,12 @@ import json
 from typing import Any
 
 from app.repositories.leads import LeadRecord
+from app.services.scoring_examples import render_few_shot_examples
 
 
 SCORE_TEMPERATURE = 0.0
 DRAFT_TEMPERATURE = 0.2
 OPENAI_COMPATIBLE_TRIAGE_TEMPERATURE = 0.6
-
 
 SCORE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -92,30 +92,49 @@ def lead_context(lead: LeadRecord) -> dict[str, Any]:
 
 
 def build_score_prompt(lead: LeadRecord) -> str:
+    few_shot_examples = render_few_shot_examples()
     return f"""
 You are a lead qualification scorer for Xpatweb, a South African immigration consultancy.
 A field extraction step has already produced the structured JSON below.
+The deterministic DNQ pre-check has already passed, so this lead is not a hard DNQ.
 Your job is to assign lead_score and explain why. Do not draft a reply.
+Use doc/业务规格.md §10.3 and §13 as the business standard. The notes below are the implemented
+scoring contract; follow them over generic immigration intuition.
 
 EXTRACTED FIELDS:
 {json.dumps(lead_context(lead), ensure_ascii=False, indent=2)}
 
 INDIVIDUAL LEADS RUBRIC:
-- GD: strong visa signal such as Retired Person Visa, Remote Work Visa, PR Financially Independent, or high net worth; senior title, first-world nationality, urgency, multi-visa, and coherent message strengthen GD.
-- MF: coherent enquiry with some value signal but missing important wealth/title details.
-- MD: coherent enquiry but limited value signal or singular low-detail visa request.
-- BD: incoherent, low-value, unsupported, or likely bad-fit enquiry.
+- GD: visa in Retired Person Visa, Remote Work Visa, PR Financially Independent, or High Net Worth
+  plus strong support such as senior title, first-world nationality, NQF 8+, urgency/multi-visa,
+  and coherent educated writing.
+- MF: net worth and title are undefined, but urgency or multi-visa plus coherent educated writing
+  make follow-up worthwhile.
+- MD: net worth and title are undefined, singular visa need, coherent writing, and limited value signal.
+- BD: low-value, unsupported, likely bad-fit, or incoherent enquiry.
 
 CORPORATE LEADS RUBRIC:
 - GD: corporate domain + Director/HR/PA + non-verification multi-visa.
 - MF: company email + unspecified department + verification/assessment only.
 - MD: personal email + small/unspecified company + verification/assessment only.
 
+SOFT SIGNALS FROM HISTORICAL DATA:
+- Retired Person Visa is almost always GD unless facts contradict it.
+- Visa Verification + Telephone Enquiry is usually Corporate MF.
+- Chinese Visa, e-Visa, and WhatsApp-origin poor-fit patterns are usually BD unless strong contrary facts are present.
+- Critical Skills / General Work enquiries with low qualification, low salary, or weak employment facts should not be upgraded.
+- Household employee, domestic worker, nanny, housekeeper, or other non-specialist worker employment enquiries are usually BD/Bad-fit for Xpatweb's premium immigration services unless there is a strong corporate sponsor, multiple employees, or other premium value signal.
+- Employer-sponsored domestic worker enquiries from a private family are not corporate GD/MF simply because the family is arranging employment.
+
+FEW-SHOT EXAMPLES FROM doc/业务规格.md §13.3:
+{few_shot_examples}
+
 Rules:
 - The deterministic hard-DNQ check has already passed. Never invent a DNQ reason.
 - Treat risk_flags as prompts for human review, not automatic rejection.
-- Retired Person Visa is usually strong unless facts contradict it.
-- score_confidence is low if nationality, job_title, and net_worth_indicator are mostly missing.
+- Map historical Bad/BD to the system enum BD.
+- score_confidence is low if any of nationality, job_title, or net_worth_indicator are null and the rubric requires them.
+- If visa_category is Unknown but additional_info/raw extracted_fields show a work visa assessment for a domestic worker or housekeeper, score BD with medium confidence unless premium value facts are present.
 - escalation_flag is true if extracted facts suggest frustration, complaint posture, deadline pressure, or urgent escalation.
 - Never fabricate facts. Cite only fields in the JSON.
 """.strip()
@@ -125,7 +144,8 @@ def build_draft_prompt(lead: LeadRecord) -> str:
     return f"""
 You are drafting first-response communication for Xpatweb leads.
 Use the structured lead JSON below. Do not mention that AI or background research was used.
-Do not invent prices, government fees, missing documents, dates, or consultant names.
+Use South African formal English. Do not use contractions.
+Do not invent prices, government fees, missing documents, dates, legal requirements, or consultant names.
 If fees are not supplied in the JSON, ask the lead to book/confirm details rather than quoting exact fees.
 
 LEAD JSON:
@@ -135,8 +155,11 @@ Draft requirements:
 - Keep the combined JSON response concise and under 700 words.
 - Do not add phone numbers, email addresses, calendar links, signatures, or consultant names unless they are explicitly present in the lead JSON.
 - If dnq_reason is present, write a concise refusal draft for human review and set phone_script to null.
-- email_draft: concise professional email aligned to the lead score and visa category.
+- GD email_draft: propose a consultation and frame the response around the lead profile.
+- MF email_draft: provide the approved costing only if present in the JSON, explain why the route may fit, and ask for missing facts.
+- MD email_draft: provide a cautious service overview or assessment route, approved costing only if present, and ask for confirmation.
+- BD email_draft: do not hard-reject unless dnq_reason is present; provide a low-commitment assessment or internal-review response.
 - whatsapp_draft: short WhatsApp version, or null if inappropriate.
-- phone_script: short opening call script for GD/MF/MD leads, or null if inappropriate.
+- phone_script: short opening call script for GD/MF/MD leads, or null if inappropriate; null for DNQ.
 - internal_whatsapp_post: internal Box-Quality-Action style note for the team.
 """.strip()
