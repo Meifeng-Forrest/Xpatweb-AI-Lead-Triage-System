@@ -53,6 +53,15 @@ def triage_adapter() -> OpenAICompatibleTriageAdapter:
     )
 
 
+def kimi_triage_adapter() -> OpenAICompatibleTriageAdapter:
+    return OpenAICompatibleTriageAdapter(
+        provider="kimi",
+        base_url="https://provider.example/v1",
+        api_key="test-key",
+        model="kimi-k2.6",
+    )
+
+
 class OpenAICompatibleAdaptersTest(unittest.IsolatedAsyncioTestCase):
     async def test_valid_extraction_response_is_parsed(self) -> None:
         service = extraction_adapter()
@@ -124,6 +133,11 @@ class OpenAICompatibleAdaptersTest(unittest.IsolatedAsyncioTestCase):
         prompt = service.client.generate_json.await_args.kwargs["prompt"]
         self.assertIn("domestic worker", prompt)
         self.assertIn("score BD with medium confidence", prompt)
+
+    async def test_kimi_score_temperature_uses_provider_supported_value(self) -> None:
+        service = kimi_triage_adapter()
+
+        self.assertEqual(service.score_temperature, 1.0)
 
 
 if __name__ == "__main__":

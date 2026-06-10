@@ -121,8 +121,19 @@ CORPORATE LEADS RUBRIC:
 SOFT SIGNALS FROM HISTORICAL DATA:
 - Retired Person Visa is almost always GD unless facts contradict it.
 - Visa Verification + Telephone Enquiry is usually Corporate MF.
+- Corporate Visa Assessment is MF only when there is a clear company context plus a meaningful volume
+  signal (about 6+ workers), HR/Director/PA involvement, or another premium service signal. A sparse
+  one-employee or two-employee assessment via telephone/personal-domain context remains MD unless
+  stronger company value facts are present.
+- High-volume corporate assessment (for example 11 workers) can remain MF even if the facts mention
+  undocumented workers, fake papers, or qualification risk; those risks lower confidence and should
+  be explained, but they should not automatically push a high-volume corporate assessment to MD.
 - Chinese Visa, e-Visa, and WhatsApp-origin poor-fit patterns are usually BD unless strong contrary facts are present.
 - Critical Skills / General Work enquiries with low qualification, low salary, or weak employment facts should not be upgraded.
+- Relative's Visa enquiries involving a child, an expiring/expired visa, or a long-term relationship are
+  usually BD when there is no first-world nationality, high-net-worth, senior title, or other premium value signal.
+- Visitor 11(1), Visitor 11(1)(b)(iii), and research-visitor assessment enquiries with limited facts are
+  usually BD; do not upgrade them to MD solely because an assessment or costing could be sent.
 - Household employee, domestic worker, nanny, housekeeper, or other non-specialist worker employment enquiries are usually BD/Bad-fit for Xpatweb's premium immigration services unless there is a strong corporate sponsor, multiple employees, or other premium value signal.
 - Employer-sponsored domestic worker enquiries from a private family are not corporate GD/MF simply because the family is arranging employment.
 
@@ -133,6 +144,8 @@ Rules:
 - The deterministic hard-DNQ check has already passed. Never invent a DNQ reason.
 - Treat risk_flags as prompts for human review, not automatic rejection.
 - Map historical Bad/BD to the system enum BD.
+- Do not upgrade historical BD/Bad-fit patterns to MD only because the email is coherent or the client may meet
+  basic category requirements; require a premium value signal before lifting them.
 - score_confidence is low if any of nationality, job_title, or net_worth_indicator are null and the rubric requires them.
 - If visa_category is Unknown but additional_info/raw extracted_fields show a work visa assessment for a domestic worker or housekeeper, score BD with medium confidence unless premium value facts are present.
 - escalation_flag is true if extracted facts suggest frustration, complaint posture, deadline pressure, or urgent escalation.

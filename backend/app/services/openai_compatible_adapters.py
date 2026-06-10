@@ -91,7 +91,9 @@ class OpenAICompatibleTriageAdapter:
         self.provider = provider
         self.score_model = model
         self.draft_model = model
-        self.score_temperature = SCORE_TEMPERATURE
+        # Kimi k2.6 当前只接受 temperature=1.0；其他 provider 仍保持评分温度 0，
+        # 这样既能通过 Kimi 兼容性限制，也不牺牲 Shengsuanyun/Gemini 路径的确定性。
+        self.score_temperature = 1.0 if provider == "kimi" else SCORE_TEMPERATURE
         self.draft_temperature = OPENAI_COMPATIBLE_TRIAGE_TEMPERATURE
         self.client = OpenAICompatibleJsonClient(
             provider=provider,
@@ -109,7 +111,7 @@ class OpenAICompatibleTriageAdapter:
             prompt=with_schema(build_score_prompt(lead), SCORE_SCHEMA),
             temperature=self.score_temperature,
             summary={"lead_id": lead.lead_id, "source_box": lead.source_box},
-            max_tokens=700,
+            max_tokens=1800,
         )
         try:
             return LeadScoreResult.model_validate(data)

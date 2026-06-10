@@ -38,12 +38,13 @@ class OpenAICompatibleJsonClient:
         if not self.api_key:
             raise RuntimeError(f"{self.provider} API key is not configured")
 
+        reasoning_disabled = self.thinking_disabled and self.provider == "shengsuanyun"
         request_summary = {
             **summary,
             "provider": self.provider,
             "model": self.model,
             "temperature": temperature,
-            "reasoning_disabled": self.thinking_disabled,
+            "reasoning_disabled": reasoning_disabled,
             "prompt": summarize_text(prompt),
         }
         self.logger.info("%s enter %s", tag, request_summary)
@@ -60,12 +61,10 @@ class OpenAICompatibleJsonClient:
                     "response_format": {"type": "json_object"},
                     "messages": [{"role": "user", "content": prompt}],
                 }
-                if self.thinking_disabled and self.provider == "shengsuanyun":
+                if reasoning_disabled:
                     # 实测 Shengsuanyun 的 Gemini 路由会忽略 thinking.type=disabled；
                     # reasoning.enabled=false 才会停止 reasoning token 消耗。
                     request_body["reasoning"] = {"enabled": False}
-                elif self.thinking_disabled:
-                    request_body["thinking"] = {"type": "disabled"}
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers={
@@ -86,6 +85,11 @@ class OpenAICompatibleJsonClient:
             if not isinstance(data, dict):
                 raise ValueError("Model response JSON must be an object")
         except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError, ValueError) as exc:
+            response_status = None
+            response_body = None
+            if isinstance(exc, httpx.HTTPStatusError):
+                response_status = exc.response.status_code
+                response_body = exc.response.text[:500]
             self.logger.exception(
                 "%s fail %s",
                 tag,
@@ -94,6 +98,8 @@ class OpenAICompatibleJsonClient:
                     "ms": round((time.perf_counter() - started_at) * 1000),
                     "error_type": exc.__class__.__name__,
                     "error": str(exc)[:300],
+                    "response_status": response_status,
+                    "response_body": response_body,
                 },
             )
             raise
